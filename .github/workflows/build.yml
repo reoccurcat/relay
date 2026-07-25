@@ -53,14 +53,14 @@ jobs:
           chmod 600 ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
 
       - name: Set build number
-        working-directory: src
+        working-directory: src/ios
         run: |
           BUILD_NUM=$(date +%Y%m%d%H%M)
           agvtool new-version -all "$BUILD_NUM" || true
           echo "BUILD_NUM=$BUILD_NUM" >> "$GITHUB_ENV"
 
       - name: Archive
-        working-directory: src
+        working-directory: src/ios
         run: |
           xcodebuild archive \
             -project "${{ env.PROJECT_PATH }}" \
