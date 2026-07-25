@@ -32,7 +32,5 @@ jobs:
       upload: >-
         ${{ github.event.action == 'studio-release'
             || github.event.inputs.upload == 'true' }}
-      # Emma + Hayden. Create the group in App Store Connect first.
-      testflight_groups: >-
-        ${{ github.event.action == 'studio-release' && 'Internal' || '' }}
+      
     secrets: inherit
