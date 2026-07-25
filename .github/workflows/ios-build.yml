@@ -165,14 +165,24 @@ jobs:
         working-directory: src
         run: |
           set -o pipefail
+          # Pick the newest-runtime iPhone simulator actually present on this
+          # image — device names churn with every Xcode release.
+          UDID=$(xcrun simctl list devices available --json | jq -r '
+            [.devices | to_entries[]
+             | select(.key | contains("iOS"))
+            ] | sort_by(.key) | reverse
+              | .[].value[] | select(.name | startswith("iPhone")) | .udid' | head -n 1)
+          test -n "$UDID" || { echo "::error::no iPhone simulator on this image"; xcrun simctl list devices available; exit 1; }
+          echo "Testing on simulator $UDID"
           xcodebuild test \
             ${{ steps.proj.outputs.flag }} "${{ inputs.project_path }}" \
             -scheme "${{ inputs.scheme }}" \
-            -destination "${{ inputs.test_destination }}" \
+            -destination "platform=iOS Simulator,id=$UDID" \
             -clonedSourcePackagesDirPath "$SPM_CACHE" \
             -resultBundlePath "$RUNNER_TEMP/${{ inputs.app_name }}.xcresult" \
             CODE_SIGNING_ALLOWED=NO \
             | tee -a "$RUNNER_TEMP/build.log"
+
 
       # ---------- compile-only path ----------
       - name: Build (no signing)
