@@ -4,19 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "GitLab ref to build"
+        description: "GitLab ref (branch or tag)"
         required: false
         default: "main"
       upload:
-        description: "Ship to TestFlight (uncheck for compile-only)"
+        description: "Ship to TestFlight"
         type: boolean
         required: false
-        default: true
+        default: false
   repository_dispatch:
-    types: [studio-push]
+    types: [studio-push, studio-release]
 
 concurrency:
-  group: relay-studio
+  group: relay-studio-${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
   cancel-in-progress: true
 
 jobs:
@@ -27,6 +27,12 @@ jobs:
       gitlab_path: nurture-labs-llc/studio
       project_path: ios/Studio.xcodeproj
       scheme: Studio
-      ref: ${{ github.event.inputs.ref || github.event.client_payload.ref || 'main' }}
-      upload: ${{ github.event.inputs.upload != 'false' }}
+      ref: ${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
+      # TestFlight only on a release dispatch or an explicit manual tick.
+      upload: >-
+        ${{ github.event.action == 'studio-release'
+            || github.event.inputs.upload == 'true' }}
+      # Emma + Hayden. Create the group in App Store Connect first.
+      testflight_groups: >-
+        ${{ github.event.action == 'studio-release' && 'Internal' || '' }}
     secrets: inherit

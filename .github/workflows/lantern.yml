@@ -4,19 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "GitLab ref to build"
+        description: "GitLab ref (branch or tag)"
         required: false
         default: "main"
       upload:
-        description: "Ship to TestFlight (uncheck for compile-only)"
+        description: "Ship to TestFlight"
         type: boolean
         required: false
-        default: true
+        default: false
   repository_dispatch:
-    types: [lantern-push]
+    types: [lantern-push, lantern-release]
 
 concurrency:
-  group: relay-lantern
+  group: relay-lantern-${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
   cancel-in-progress: true
 
 jobs:
@@ -24,11 +24,15 @@ jobs:
     uses: ./.github/workflows/ios-build.yml
     with:
       app_name: Lantern
-      # TODO: only lantern-landing exists on GitLab right now —
-      # point this at the real iOS repo once it's created
+      # TODO: point at the real iOS repo once it exists —
+      # only hayden/lantern-landing is on GitLab today.
       gitlab_path: nurture-labs-llc/lantern
       project_path: ios/Lantern.xcodeproj
       scheme: Lantern
-      ref: ${{ github.event.inputs.ref || github.event.client_payload.ref || 'main' }}
-      upload: ${{ github.event.inputs.upload != 'false' }}
+      ref: ${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
+      upload: >-
+        ${{ github.event.action == 'lantern-release'
+            || github.event.inputs.upload == 'true' }}
+      testflight_groups: >-
+        ${{ github.event.action == 'lantern-release' && 'Internal' || '' }}
     secrets: inherit

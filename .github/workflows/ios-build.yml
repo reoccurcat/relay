@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       app_name:
-        description: "Short name used for archive/log naming, e.g. Studio"
+        description: "Short name for archive/artifact naming, e.g. Studio"
         required: true
         type: string
       gitlab_path:
@@ -16,11 +16,10 @@ on:
         required: true
         type: string
       scheme:
-        description: "Xcode scheme to build"
         required: true
         type: string
       ref:
-        description: "GitLab ref to build"
+        description: "GitLab ref to build (branch or tag)"
         required: false
         type: string
         default: "main"
@@ -41,10 +40,23 @@ on:
         type: string
         default: "Release"
       upload:
-        description: "Set false to compile only — no signing, no TestFlight"
+        description: "true = archive + sign + TestFlight. false = compile only."
+        required: false
+        type: boolean
+        default: false
+      run_tests:
         required: false
         type: boolean
         default: true
+      test_destination:
+        required: false
+        type: string
+        default: "platform=iOS Simulator,name=iPhone 16,OS=latest"
+      testflight_groups:
+        description: "Comma-separated external tester groups. Empty = internal testers only."
+        required: false
+        type: string
+        default: ""
 
     secrets:
       GITLAB_TOKEN:
@@ -61,7 +73,10 @@ on:
 jobs:
   build:
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 90
+
+    env:
+      SPM_CACHE: ${{ github.workspace }}/.spm
 
     steps:
       - name: Select Xcode
@@ -70,11 +85,13 @@ jobs:
           sudo xcode-select -s "/Applications/Xcode_${{ inputs.xcode_version }}.app/Contents/Developer"
           xcodebuild -version
 
+      # NOTE: full history on purpose — `git rev-list --count` needs it.
+      # --depth 1 would make every build number 1.
       - name: Clone source from GitLab
         env:
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
         run: |
-          git clone --depth 1 --branch "${{ inputs.ref }}" \
+          git clone --branch "${{ inputs.ref }}" \
             "https://oauth2:${GITLAB_TOKEN}@${{ inputs.gitlab_host }}/${{ inputs.gitlab_path }}.git" src
           cd src && git log -1 --oneline
 
@@ -84,36 +101,80 @@ jobs:
         run: |
           P="${{ inputs.project_path }}"
           test -e "$P" || { echo "::error::$P not found in repo"; exit 1; }
-
-          # .xcworkspace needs -workspace, .xcodeproj needs -project
           case "$P" in
             *.xcworkspace) echo "flag=-workspace" >> "$GITHUB_OUTPUT" ;;
             *.xcodeproj)   echo "flag=-project"   >> "$GITHUB_OUTPUT" ;;
             *) echo "::error::project_path must end in .xcodeproj or .xcworkspace"; exit 1 ;;
           esac
-
-          # agvtool must run from the directory containing the project
           echo "dir=$(dirname "$P")" >> "$GITHUB_OUTPUT"
 
-      - name: Write App Store Connect API key
-        if: inputs.upload
-        env:
-          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      - name: Compute version and changelog
+        id: ver
+        working-directory: src
         run: |
-          mkdir -p ~/.appstoreconnect/private_keys
-          printf '%s\n' "$ASC_KEY_P8" > ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
-          chmod 600 ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          # Monotonic and reproducible: the same commit always yields the same build number.
+          BUILD_NUM=$(git rev-list --count HEAD)
+          SHA=$(git rev-parse --short HEAD)
+          echo "build=$BUILD_NUM" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
-      - name: Set build number
-        if: inputs.upload
-        working-directory: src/${{ steps.proj.outputs.dir }}
+          # Marketing version comes from the tag when building one; otherwise leave the project alone.
+          if git describe --exact-match --tags HEAD >/dev/null 2>&1; then
+            TAG=$(git describe --exact-match --tags HEAD)
+            echo "marketing=${TAG#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "marketing=" >> "$GITHUB_OUTPUT"
+          fi
+
+          PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV" ]; then
+            echo "Changes since $PREV:" > "$RUNNER_TEMP/changelog.md"
+            git log --no-merges --pretty='- %s' "$PREV"..HEAD >> "$RUNNER_TEMP/changelog.md"
+          else
+            echo "Recent changes:" > "$RUNNER_TEMP/changelog.md"
+            git log --no-merges --pretty='- %s' -20 >> "$RUNNER_TEMP/changelog.md"
+          fi
+
+          # TestFlight caps "What to Test" at 4000 characters.
+          head -c 3900 "$RUNNER_TEMP/changelog.md" > "$RUNNER_TEMP/changelog.trunc.md"
+          mv "$RUNNER_TEMP/changelog.trunc.md" "$RUNNER_TEMP/changelog.md"
+
+          {
+            echo "### ${{ inputs.app_name }} — build $BUILD_NUM (\`$SHA\`)"
+            echo
+            cat "$RUNNER_TEMP/changelog.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.SPM_CACHE }}
+          key: spm-${{ inputs.app_name }}-${{ hashFiles('src/**/Package.resolved') }}
+          restore-keys: spm-${{ inputs.app_name }}-
+
+      - name: Resolve dependencies
+        working-directory: src
         run: |
-          BUILD_NUM=$(date +%Y%m%d%H%M)
-          agvtool new-version -all "$BUILD_NUM" || true
-          echo "BUILD_NUM=$BUILD_NUM" >> "$GITHUB_ENV"
+          xcodebuild -resolvePackageDependencies \
+            ${{ steps.proj.outputs.flag }} "${{ inputs.project_path }}" \
+            -scheme "${{ inputs.scheme }}" \
+            -clonedSourcePackagesDirPath "$SPM_CACHE"
 
-      # ---- compile-only path: fast signal, no secrets needed ----
+      - name: Test
+        if: inputs.run_tests
+        working-directory: src
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            ${{ steps.proj.outputs.flag }} "${{ inputs.project_path }}" \
+            -scheme "${{ inputs.scheme }}" \
+            -destination "${{ inputs.test_destination }}" \
+            -clonedSourcePackagesDirPath "$SPM_CACHE" \
+            -resultBundlePath "$RUNNER_TEMP/${{ inputs.app_name }}.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee -a "$RUNNER_TEMP/build.log"
+
+      # ---------- compile-only path ----------
       - name: Build (no signing)
         if: ${{ !inputs.upload }}
         working-directory: src
@@ -124,11 +185,42 @@ jobs:
             -scheme "${{ inputs.scheme }}" \
             -configuration "${{ inputs.configuration }}" \
             -destination 'generic/platform=iOS' \
+            -clonedSourcePackagesDirPath "$SPM_CACHE" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            | tee "$RUNNER_TEMP/build.log"
+            | tee -a "$RUNNER_TEMP/build.log"
 
-      # ---- full path: archive, export, ship ----
+      # ---------- release path ----------
+      - name: Write App Store Connect credentials
+        if: inputs.upload
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          # .p8 on disk for xcodebuild's automatic signing
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s\n' "$ASC_KEY_P8" > ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          chmod 600 ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+
+          # JSON form for fastlane. jq handles the newline escaping in the key body.
+          jq -n \
+            --arg kid "$ASC_KEY_ID" \
+            --arg iss "$ASC_ISSUER_ID" \
+            --arg key "$ASC_KEY_P8" \
+            '{key_id:$kid, issuer_id:$iss, key:$key, duration:1200, in_house:false}' \
+            > "$RUNNER_TEMP/asc_key.json"
+          chmod 600 "$RUNNER_TEMP/asc_key.json"
+
+      - name: Stamp version
+        if: inputs.upload
+        working-directory: src/${{ steps.proj.outputs.dir }}
+        run: |
+          agvtool new-version -all "${{ steps.ver.outputs.build }}"
+          if [ -n "${{ steps.ver.outputs.marketing }}" ]; then
+            agvtool new-marketing-version "${{ steps.ver.outputs.marketing }}"
+          fi
+
       - name: Archive
         if: inputs.upload
         working-directory: src
@@ -140,13 +232,14 @@ jobs:
             -configuration "${{ inputs.configuration }}" \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/${{ inputs.app_name }}.xcarchive" \
+            -clonedSourcePackagesDirPath "$SPM_CACHE" \
             -allowProvisioningUpdates \
             -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8 \
             -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
             -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}" \
             CODE_SIGN_STYLE=Automatic \
             DEVELOPMENT_TEAM="${{ secrets.TEAM_ID }}" \
-            | tee "$RUNNER_TEMP/build.log"
+            | tee -a "$RUNNER_TEMP/build.log"
 
       - name: Export IPA
         if: inputs.upload
@@ -173,29 +266,66 @@ jobs:
             -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
             -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}"
 
+      # fastlane pilot instead of altool: altool can upload but cannot set
+      # "What to Test". pilot uploads, waits for processing, then writes the
+      # changelog and assigns tester groups in one call.
       - name: Upload to TestFlight
         if: inputs.upload
+        env:
+          FASTLANE_SKIP_UPDATE_CHECK: "1"
+          FASTLANE_HIDE_CHANGELOG: "1"
+          SPACESHIP_SKIP_2FA_UPGRADE: "1"
         run: |
-          # product name may not match app_name — glob instead of assuming
           IPA=$(find "$RUNNER_TEMP/export" -maxdepth 1 -name '*.ipa' | head -1)
           test -n "$IPA" || { echo "::error::no .ipa produced"; exit 1; }
-          echo "Uploading $(basename "$IPA")"
 
-          xcrun altool --upload-app \
-            -f "$IPA" \
-            -t ios \
-            --apiKey "${{ secrets.ASC_KEY_ID }}" \
-            --apiIssuer "${{ secrets.ASC_ISSUER_ID }}"
+          CHANGELOG=$(cat "$RUNNER_TEMP/changelog.md")
+          GROUPS="${{ inputs.testflight_groups }}"
 
-      - name: Upload build log
+          ARGS=(
+            ipa:"$IPA"
+            api_key_path:"$RUNNER_TEMP/asc_key.json"
+            changelog:"$CHANGELOG"
+            skip_waiting_for_build_processing:false
+            distribute_external:false
+          )
+
+          if [ -n "$GROUPS" ]; then
+            ARGS=( "${ARGS[@]/distribute_external:false/distribute_external:true}" )
+            ARGS+=( groups:"$GROUPS" )
+          fi
+
+          fastlane run upload_to_testflight "${ARGS[@]}"
+
+      - name: Summarize release
+        if: inputs.upload && success()
+        run: |
+          {
+            echo
+            echo "✅ **Shipped to TestFlight** — build \`${{ steps.ver.outputs.build }}\`"
+            if [ -n "${{ steps.ver.outputs.marketing }}" ]; then
+              echo "Version \`${{ steps.ver.outputs.marketing }}\`"
+            fi
+            if [ -n "${{ inputs.testflight_groups }}" ]; then
+              echo "Distributed to: ${{ inputs.testflight_groups }}"
+            else
+              echo "Internal testers only"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------- diagnostics ----------
+      - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.app_name }}-build-log
-          path: ${{ runner.temp }}/build.log
+          name: ${{ inputs.app_name }}-${{ steps.ver.outputs.build || 'unknown' }}
+          path: |
+            ${{ runner.temp }}/build.log
+            ${{ runner.temp }}/changelog.md
+            ${{ runner.temp }}/*.xcresult
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 14
 
       - name: Scrub credentials
         if: always()
-        run: rm -rf ~/.appstoreconnect src
+        run: rm -rf ~/.appstoreconnect "$RUNNER_TEMP/asc_key.json" src
