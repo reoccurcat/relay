@@ -33,6 +33,4 @@ jobs:
       upload: >-
         ${{ github.event.action == 'lantern-release'
             || github.event.inputs.upload == 'true' }}
-      testflight_groups: >-
-        ${{ github.event.action == 'lantern-release' && 'Internal' || '' }}
     secrets: inherit
