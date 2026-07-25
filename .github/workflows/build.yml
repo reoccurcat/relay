@@ -60,7 +60,7 @@ jobs:
           echo "BUILD_NUM=$BUILD_NUM" >> "$GITHUB_ENV"
 
       - name: Archive
-        working-directory: src/ios
+        working-directory: src
         run: |
           xcodebuild archive \
             -project "${{ env.PROJECT_PATH }}" \
