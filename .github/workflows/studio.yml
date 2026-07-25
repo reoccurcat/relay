@@ -1,0 +1,32 @@
+name: studio
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "GitLab ref to build"
+        required: false
+        default: "main"
+      upload:
+        description: "Ship to TestFlight (uncheck for compile-only)"
+        type: boolean
+        required: false
+        default: true
+  repository_dispatch:
+    types: [studio-push]
+
+concurrency:
+  group: relay-studio
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/ios-build.yml
+    with:
+      app_name: Studio
+      gitlab_path: nurture-labs-llc/studio
+      project_path: ios/Studio.xcodeproj
+      scheme: Studio
+      ref: ${{ github.event.inputs.ref || github.event.client_payload.ref || 'main' }}
+      upload: ${{ github.event.inputs.upload != 'false' }}
+    secrets: inherit

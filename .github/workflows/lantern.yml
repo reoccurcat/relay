@@ -1,0 +1,34 @@
+name: lantern
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "GitLab ref to build"
+        required: false
+        default: "main"
+      upload:
+        description: "Ship to TestFlight (uncheck for compile-only)"
+        type: boolean
+        required: false
+        default: true
+  repository_dispatch:
+    types: [lantern-push]
+
+concurrency:
+  group: relay-lantern
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/ios-build.yml
+    with:
+      app_name: Lantern
+      # TODO: only lantern-landing exists on GitLab right now —
+      # point this at the real iOS repo once it's created
+      gitlab_path: nurture-labs-llc/lantern
+      project_path: ios/Lantern.xcodeproj
+      scheme: Lantern
+      ref: ${{ github.event.inputs.ref || github.event.client_payload.ref || 'main' }}
+      upload: ${{ github.event.inputs.upload != 'false' }}
+    secrets: inherit

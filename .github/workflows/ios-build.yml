@@ -1,0 +1,201 @@
+name: ios-build
+
+on:
+  workflow_call:
+    inputs:
+      app_name:
+        description: "Short name used for archive/log naming, e.g. Studio"
+        required: true
+        type: string
+      gitlab_path:
+        description: "namespace/project on the GitLab host"
+        required: true
+        type: string
+      project_path:
+        description: ".xcodeproj or .xcworkspace path, relative to repo root"
+        required: true
+        type: string
+      scheme:
+        description: "Xcode scheme to build"
+        required: true
+        type: string
+      ref:
+        description: "GitLab ref to build"
+        required: false
+        type: string
+        default: "main"
+      gitlab_host:
+        required: false
+        type: string
+        default: "gitlab.nurture-labs.io"
+      xcode_version:
+        required: false
+        type: string
+        default: "26.0"
+      runner:
+        required: false
+        type: string
+        default: "macos-15"
+      configuration:
+        required: false
+        type: string
+        default: "Release"
+      upload:
+        description: "Set false to compile only — no signing, no TestFlight"
+        required: false
+        type: boolean
+        default: true
+
+    secrets:
+      GITLAB_TOKEN:
+        required: true
+      ASC_KEY_P8:
+        required: false
+      ASC_KEY_ID:
+        required: false
+      ASC_ISSUER_ID:
+        required: false
+      TEAM_ID:
+        required: false
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Select Xcode
+        run: |
+          ls /Applications | grep -i '^Xcode'
+          sudo xcode-select -s "/Applications/Xcode_${{ inputs.xcode_version }}.app/Contents/Developer"
+          xcodebuild -version
+
+      - name: Clone source from GitLab
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: |
+          git clone --depth 1 --branch "${{ inputs.ref }}" \
+            "https://oauth2:${GITLAB_TOKEN}@${{ inputs.gitlab_host }}/${{ inputs.gitlab_path }}.git" src
+          cd src && git log -1 --oneline
+
+      - name: Resolve project flags
+        id: proj
+        working-directory: src
+        run: |
+          P="${{ inputs.project_path }}"
+          test -e "$P" || { echo "::error::$P not found in repo"; exit 1; }
+
+          # .xcworkspace needs -workspace, .xcodeproj needs -project
+          case "$P" in
+            *.xcworkspace) echo "flag=-workspace" >> "$GITHUB_OUTPUT" ;;
+            *.xcodeproj)   echo "flag=-project"   >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::project_path must end in .xcodeproj or .xcworkspace"; exit 1 ;;
+          esac
+
+          # agvtool must run from the directory containing the project
+          echo "dir=$(dirname "$P")" >> "$GITHUB_OUTPUT"
+
+      - name: Write App Store Connect API key
+        if: inputs.upload
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s\n' "$ASC_KEY_P8" > ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          chmod 600 ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+
+      - name: Set build number
+        if: inputs.upload
+        working-directory: src/${{ steps.proj.outputs.dir }}
+        run: |
+          BUILD_NUM=$(date +%Y%m%d%H%M)
+          agvtool new-version -all "$BUILD_NUM" || true
+          echo "BUILD_NUM=$BUILD_NUM" >> "$GITHUB_ENV"
+
+      # ---- compile-only path: fast signal, no secrets needed ----
+      - name: Build (no signing)
+        if: ${{ !inputs.upload }}
+        working-directory: src
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            ${{ steps.proj.outputs.flag }} "${{ inputs.project_path }}" \
+            -scheme "${{ inputs.scheme }}" \
+            -configuration "${{ inputs.configuration }}" \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            | tee "$RUNNER_TEMP/build.log"
+
+      # ---- full path: archive, export, ship ----
+      - name: Archive
+        if: inputs.upload
+        working-directory: src
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            ${{ steps.proj.outputs.flag }} "${{ inputs.project_path }}" \
+            -scheme "${{ inputs.scheme }}" \
+            -configuration "${{ inputs.configuration }}" \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/${{ inputs.app_name }}.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8 \
+            -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}" \
+            CODE_SIGN_STYLE=Automatic \
+            DEVELOPMENT_TEAM="${{ secrets.TEAM_ID }}" \
+            | tee "$RUNNER_TEMP/build.log"
+
+      - name: Export IPA
+        if: inputs.upload
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>teamID</key><string>${{ secrets.TEAM_ID }}</string>
+          </dict>
+          </plist>
+          PLIST
+
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/${{ inputs.app_name }}.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8 \
+            -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}"
+
+      - name: Upload to TestFlight
+        if: inputs.upload
+        run: |
+          # product name may not match app_name — glob instead of assuming
+          IPA=$(find "$RUNNER_TEMP/export" -maxdepth 1 -name '*.ipa' | head -1)
+          test -n "$IPA" || { echo "::error::no .ipa produced"; exit 1; }
+          echo "Uploading $(basename "$IPA")"
+
+          xcrun altool --upload-app \
+            -f "$IPA" \
+            -t ios \
+            --apiKey "${{ secrets.ASC_KEY_ID }}" \
+            --apiIssuer "${{ secrets.ASC_ISSUER_ID }}"
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.app_name }}-build-log
+          path: ${{ runner.temp }}/build.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Scrub credentials
+        if: always()
+        run: rm -rf ~/.appstoreconnect src
