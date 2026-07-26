@@ -32,5 +32,6 @@ jobs:
       upload: >-
         ${{ github.event.action == 'studio-release'
             || github.event.inputs.upload == 'true' }}
-      
+      # Tags always follow a green main compile — don't re-test on release.
+      run_tests: ${{ github.event.action != 'studio-release' }}
     secrets: inherit
