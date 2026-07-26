@@ -24,9 +24,7 @@ jobs:
     uses: ./.github/workflows/ios-build.yml
     with:
       app_name: Lantern
-      # TODO: point at the real iOS repo once it exists —
-      # only hayden/lantern-landing is on GitLab today.
-      gitlab_path: nurture-labs-llc/lantern
+      gitlab_path: hayden/intel-dashboard
       project_path: ios/Lantern.xcodeproj
       scheme: Lantern
       ref: ${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
