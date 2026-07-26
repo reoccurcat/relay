@@ -95,6 +95,30 @@ jobs:
             "https://oauth2:${GITLAB_TOKEN}@${{ inputs.gitlab_host }}/${{ inputs.gitlab_path }}.git" src
           cd src && git log -1 --oneline
 
+          # Deterministic mtimes (last-commit time per file): a fresh clone
+          # stamps "now" on everything, which makes Xcode's incremental build
+          # database treat every file as changed and defeats the DerivedData
+          # cache. With commit-time mtimes, unchanged files keep identical
+          # stats across runs and skip recompilation.
+          python3 - <<'PY'
+          import subprocess, os
+          out = subprocess.check_output(
+              ["git", "log", "--format=%x00C%ct", "--name-only", "-z"]
+          ).decode("utf-8", "replace")
+          stamped = set()
+          current = None
+          for token in out.split("\0"):
+              if token.startswith("C") and token[1:].isdigit():
+                  current = int(token[1:])
+              elif token and current and token not in stamped:
+                  stamped.add(token)
+                  try:
+                      os.utime(token, (current, current))
+                  except OSError:
+                      pass
+          print(f"restored mtimes for {len(stamped)} files")
+          PY
+
       - name: Resolve project flags
         id: proj
         working-directory: src
@@ -152,6 +176,18 @@ jobs:
           key: spm-${{ inputs.app_name }}-${{ hashFiles('src/**/Package.resolved') }}
           restore-keys: spm-${{ inputs.app_name }}-
 
+      # DerivedData across runs: the run_id key never exact-hits, so every run
+      # restores the newest previous cache (restore-keys) and saves its own —
+      # combined with commit-time mtimes above, unchanged Swift files skip
+      # recompilation entirely. If a cache ever goes weird, bump the "dd1"
+      # prefix to bust it.
+      - name: Cache DerivedData
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/DerivedData
+          key: dd1-${{ inputs.app_name }}-${{ inputs.xcode_version }}-${{ github.run_id }}
+          restore-keys: dd1-${{ inputs.app_name }}-${{ inputs.xcode_version }}-
+
       - name: Resolve dependencies
         working-directory: src
         run: |
@@ -179,6 +215,7 @@ jobs:
             -scheme "${{ inputs.scheme }}" \
             -destination "platform=iOS Simulator,id=$UDID" \
             -clonedSourcePackagesDirPath "$SPM_CACHE" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -resultBundlePath "$RUNNER_TEMP/${{ inputs.app_name }}.xcresult" \
             CODE_SIGNING_ALLOWED=NO \
             | tee -a "$RUNNER_TEMP/build.log"
@@ -186,7 +223,7 @@ jobs:
 
       # ---------- compile-only path ----------
       - name: Build (no signing)
-        if: ${{ !inputs.upload }}
+        if: ${{ !inputs.upload && !inputs.run_tests }}
         working-directory: src
         run: |
           set -o pipefail
@@ -196,6 +233,7 @@ jobs:
             -configuration "${{ inputs.configuration }}" \
             -destination 'generic/platform=iOS' \
             -clonedSourcePackagesDirPath "$SPM_CACHE" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             | tee -a "$RUNNER_TEMP/build.log"
@@ -243,6 +281,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/${{ inputs.app_name }}.xcarchive" \
             -clonedSourcePackagesDirPath "$SPM_CACHE" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             | tee -a "$RUNNER_TEMP/build.log"
 
