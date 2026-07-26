@@ -102,21 +102,27 @@ jobs:
           # stats across runs and skip recompilation.
           python3 - <<'PY'
           import subprocess, os
-          out = subprocess.check_output(
-              ["git", "log", "--format=%x00C%ct", "--name-only", "-z"]
-          ).decode("utf-8", "replace")
-          stamped = set()
+          # Newest-first walk of the log; the first commit that names a file
+          # is that file's last change. Format record and file list are read
+          # as separate lines, which sidesteps -z quirks entirely.
+          stamped = {}
           current = None
-          for token in out.split("\0"):
-              if token.startswith("C") and token[1:].isdigit():
-                  current = int(token[1:])
-              elif token and current and token not in stamped:
-                  stamped.add(token)
-                  try:
-                      os.utime(token, (current, current))
-                  except OSError:
-                      pass
-          print(f"restored mtimes for {len(stamped)} files")
+          log = subprocess.check_output(
+              ["git", "log", "--format=commit:%ct", "--name-only"]
+          ).decode("utf-8", "replace")
+          for line in log.splitlines():
+              if line.startswith("commit:"):
+                  current = int(line[7:])
+              elif line and current is not None and line not in stamped:
+                  stamped[line] = current
+          restored = 0
+          for path, ts in stamped.items():
+              try:
+                  os.utime(path, (ts, ts))
+                  restored += 1
+              except OSError:
+                  pass
+          print(f"restored mtimes for {restored} files")
           PY
 
       - name: Resolve project flags
