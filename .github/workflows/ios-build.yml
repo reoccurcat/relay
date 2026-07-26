@@ -272,9 +272,10 @@ jobs:
             -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
             -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}"
 
-      # fastlane pilot instead of altool: altool can upload but cannot set
-      # "What to Test". pilot uploads, waits for processing, then writes the
-      # changelog and assigns tester groups in one call.
+      # Upload only — don't hold the job hostage to Apple's processing queue.
+      # Waiting for processing, writing "What to Test", and assigning groups
+      # happen in the best-effort step below; an ASC hiccup there is a warning,
+      # not a red run.
       - name: Upload to TestFlight
         if: inputs.upload
         env:
@@ -284,24 +285,44 @@ jobs:
         run: |
           IPA=$(find "$RUNNER_TEMP/export" -maxdepth 1 -name '*.ipa' | head -1)
           test -n "$IPA" || { echo "::error::no .ipa produced"; exit 1; }
+          echo "$IPA" > "$RUNNER_TEMP/ipa_path"
 
+          fastlane run upload_to_testflight \
+            ipa:"$IPA" \
+            api_key_path:"$RUNNER_TEMP/asc_key.json" \
+            skip_waiting_for_build_processing:true
+
+      - name: Publish changelog and groups (best effort)
+        if: inputs.upload
+        continue-on-error: true
+        env:
+          FASTLANE_SKIP_UPDATE_CHECK: "1"
+          FASTLANE_HIDE_CHANGELOG: "1"
+          SPACESHIP_SKIP_2FA_UPGRADE: "1"
+        run: |
+          IPA=$(cat "$RUNNER_TEMP/ipa_path")
           CHANGELOG=$(cat "$RUNNER_TEMP/changelog.md")
           GROUPS="${{ inputs.testflight_groups }}"
 
+          # NOTE: never pass boolean:false args to `fastlane run` — CLI values
+          # arrive as strings and Ruby treats "false" as truthy. That is exactly
+          # how distribute_external:false kept triggering external beta review
+          # (and its Beta App Description requirement) on every release.
           ARGS=(
             ipa:"$IPA"
             api_key_path:"$RUNNER_TEMP/asc_key.json"
+            distribute_only:true
+            build_number:"${{ steps.ver.outputs.build }}"
             changelog:"$CHANGELOG"
-            skip_waiting_for_build_processing:false
-            distribute_external:false
           )
 
           if [ -n "$GROUPS" ]; then
-            ARGS=( "${ARGS[@]/distribute_external:false/distribute_external:true}" )
-            ARGS+=( groups:"$GROUPS" )
+            ARGS+=( distribute_external:true groups:"$GROUPS" )
           fi
 
-          fastlane run upload_to_testflight "${ARGS[@]}"
+          if ! fastlane run upload_to_testflight "${ARGS[@]}"; then
+            echo "::warning::Build uploaded fine, but setting the changelog/groups failed — fill Test Information in App Store Connect or check Apple system status."
+          fi
 
       - name: Summarize release
         if: inputs.upload && success()
@@ -320,6 +341,19 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       # ---------- diagnostics ----------
+      # Compiler/test errors become check-run annotations, which are readable
+      # through the public API — so failures can be diagnosed without log access.
+      - name: Surface build errors
+        if: failure()
+        run: |
+          if [ -f "$RUNNER_TEMP/build.log" ]; then
+            grep -E "error: |Testing failed|\*\* TEST FAILED| failed \(" "$RUNNER_TEMP/build.log" \
+              | sort -u | head -10 \
+              | while IFS= read -r line; do
+                  echo "::error::${line}"
+                done
+          fi
+
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
