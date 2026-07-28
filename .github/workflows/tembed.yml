@@ -1,0 +1,41 @@
+# Caller for the shared iOS pipeline in reoccurcat/relay.
+#
+# This file belongs in the *relay* repo as .github/workflows/tembed.yml — it is
+# kept here so it stays in sync with the app. Mirrors studio.yml exactly.
+name: tembed
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "GitLab ref (branch or tag)"
+        required: false
+        default: "main"
+      upload:
+        description: "Ship to TestFlight"
+        type: boolean
+        required: false
+        default: false
+  repository_dispatch:
+    types: [tembed-push, tembed-release]
+
+concurrency:
+  group: relay-tembed-${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/ios-build.yml
+    with:
+      app_name: Tembed
+      gitlab_path: nurture-labs-llc/tembed
+      project_path: ios/Tembed.xcodeproj
+      scheme: Tembed
+      ref: ${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
+      # TestFlight only on a release dispatch or an explicit manual tick.
+      upload: >-
+        ${{ github.event.action == 'tembed-release'
+            || github.event.inputs.upload == 'true' }}
+      # Tags always follow a green main compile — don't re-test on release.
+      run_tests: ${{ github.event.action != 'tembed-release' }}
+    secrets: inherit
