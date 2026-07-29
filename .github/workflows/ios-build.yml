@@ -490,12 +490,25 @@ jobs:
           # arrive as strings and Ruby treats "false" as truthy. That is exactly
           # how distribute_external:false kept triggering external beta review
           # (and its Beta App Description requirement) on every release.
+          # distribute_only waits for App Store Connect to finish processing the
+          # build before it can attach anything to it, and fastlane polls for
+          # that with no timeout unless given one. So this step - marked
+          # continue-on-error precisely because it is optional - could pin a
+          # runner until GitHub's six hour limit while the binary it is waiting
+          # on had already uploaded successfully. Two releases sat like that for
+          # over an hour before anyone noticed the builds were fine and only the
+          # release notes were outstanding.
+          #
+          # 15 minutes is generous against a normal processing time of a few,
+          # and the failure is harmless: the build is already uploaded, so the
+          # only casualty is What to Test, and the check below says so.
           ARGS=(
             ipa:"$IPA"
             api_key_path:"$RUNNER_TEMP/asc_key.json"
             distribute_only:true
             build_number:"${{ steps.ver.outputs.build }}"
             changelog:"$CHANGELOG"
+            wait_processing_timeout_duration:900
           )
 
           if [ -n "$GROUPS" ]; then
