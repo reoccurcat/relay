@@ -361,6 +361,30 @@ jobs:
           echo "signing identities available:"
           security find-identity -v -p codesigning "$KEYCHAIN"
 
+          # Distribution certificates last a year, and this one signs every app
+          # built by this workflow - so the day it lapses, all of them stop
+          # signing at once, with an error that points at Xcode rather than
+          # here. Say so with a month's notice.
+          #
+          # Read back from the keychain as PEM rather than parsing the .p12:
+          # `openssl x509` behaves the same on the runner's LibreSSL and on an
+          # OpenSSL 3 that Homebrew may have put earlier in PATH, whereas
+          # reading a legacy-encrypted PKCS#12 does not. `-checkend` avoids
+          # date arithmetic, which is where this would otherwise go wrong first
+          # (BSD date takes different arguments from GNU date).
+          security find-certificate -c "Apple Distribution" -p "$KEYCHAIN" \
+            > "$RUNNER_TEMP/signing-cert.pem"
+          EXPIRY=$(openssl x509 -in "$RUNNER_TEMP/signing-cert.pem" -noout -enddate | cut -d= -f2)
+          echo "distribution certificate expires: $EXPIRY"
+
+          if ! openssl x509 -in "$RUNNER_TEMP/signing-cert.pem" -noout -checkend 0 >/dev/null 2>&1; then
+            echo "::error::The distribution certificate expired on $EXPIRY. Every app this workflow builds will fail to sign until it is replaced. Issue a new Apple Distribution certificate and update DIST_CERT_P12_BASE64 and DIST_CERT_P12_PASSWORD."
+            exit 1
+          elif ! openssl x509 -in "$RUNNER_TEMP/signing-cert.pem" -noout -checkend 2592000 >/dev/null 2>&1; then
+            echo "::warning::The distribution certificate expires on $EXPIRY, within 30 days. It signs every app this workflow builds, so all of them stop on that date. Issue a replacement and update DIST_CERT_P12_BASE64 and DIST_CERT_P12_PASSWORD before then."
+          fi
+          rm -f "$RUNNER_TEMP/signing-cert.pem"
+
       - name: Archive
         if: inputs.upload
         working-directory: src
