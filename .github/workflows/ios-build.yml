@@ -288,7 +288,12 @@ jobs:
             -archivePath "$RUNNER_TEMP/${{ inputs.app_name }}.xcarchive" \
             -clonedSourcePackagesDirPath "$SPM_CACHE" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-            CODE_SIGNING_ALLOWED=NO \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8 \
+            -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}" \
+            CODE_SIGN_STYLE=Automatic \
+            DEVELOPMENT_TEAM="${{ secrets.TEAM_ID }}" \
             | tee -a "$RUNNER_TEMP/build.log"
 
 
@@ -316,6 +321,20 @@ jobs:
             -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8 \
             -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
             -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}"
+
+      # What the IPA is actually signed with. Entitlements are applied at
+      # signing time, so archiving unsigned - as this did until now - produced
+      # an app that requested none, and -exportArchive happily re-signed it that
+      # way. Tembed's hotspot join failed with NEHotspotConfigurationError 8 for
+      # exactly that reason, and nothing in CI said a word. Cheap to print.
+      - name: Show signed entitlements
+        if: inputs.upload
+        run: |
+          IPA=$(find "$RUNNER_TEMP/export" -maxdepth 1 -name '*.ipa' | head -1)
+          rm -rf "$RUNNER_TEMP/unz" && mkdir -p "$RUNNER_TEMP/unz"
+          unzip -q -o "$IPA" -d "$RUNNER_TEMP/unz"
+          APP=$(find "$RUNNER_TEMP/unz/Payload" -maxdepth 1 -name '*.app' | head -1)
+          codesign -d --entitlements :- "$APP" 2>/dev/null || true
 
       # Upload only — don't hold the job hostage to Apple's processing queue.
       # Waiting for processing, writing "What to Test", and assigning groups
