@@ -38,4 +38,13 @@ jobs:
             || github.event.inputs.upload == 'true' }}
       # Tags always follow a green main compile — don't re-test on release.
       run_tests: ${{ github.event.action != 'tembed-release' }}
+      # App Store Connect wants this before a build can reach external testers.
+      # Without it the metadata step fails *after* setting the changelog, which
+      # read as "What to Test is broken" for a while.
+      beta_app_description: >-
+        Tembed is a remote for a LilyGO T-Embed CC1101 running Bruce firmware.
+        It mirrors the badge's screen over Bluetooth, drives its menus, browses
+        its SD card, and updates its firmware over the badge's own Wi-Fi access
+        point. It talks only to that hardware and needs one nearby to do
+        anything.
     secrets: inherit
