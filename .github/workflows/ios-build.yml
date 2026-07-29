@@ -57,6 +57,20 @@ on:
         required: false
         type: string
         default: ""
+      beta_app_description:
+        description: >-
+          App-level Test Information text. App Store Connect requires this
+          before any build reaches external testers, and without it the
+          metadata step fails after the changelog has already been set.
+          Set once per app; fastlane creates the betaAppLocalization.
+        required: false
+        type: string
+        default: ""
+      beta_app_feedback_email:
+        description: "Where TestFlight feedback goes. Set alongside beta_app_description."
+        required: false
+        type: string
+        default: ""
 
     secrets:
       GITLAB_TOKEN:
@@ -368,6 +382,13 @@ jobs:
           CHANGELOG=$(cat "$RUNNER_TEMP/changelog.md")
           GROUPS="${{ inputs.testflight_groups }}"
 
+          # Prove what is being sent. "What to Test" showing nothing has two
+          # completely different causes - an empty changelog, or a changelog
+          # that was set before a later step failed - and the log could not
+          # tell them apart.
+          echo "changelog: $(printf '%s' "$CHANGELOG" | wc -c) bytes"
+          printf '%s\n' "$CHANGELOG" | head -5
+
           # NOTE: never pass boolean:false args to `fastlane run` — CLI values
           # arrive as strings and Ruby treats "false" as truthy. That is exactly
           # how distribute_external:false kept triggering external beta review
@@ -384,8 +405,22 @@ jobs:
             ARGS+=( distribute_external:true groups:"$GROUPS" )
           fi
 
+          # Beta App Description is an app-level field in App Store Connect's
+          # Test Information, and Apple requires it before a build reaches
+          # *external* testers. Without it this step fails having already set
+          # the changelog, which is why the old message below was wrong: it
+          # blamed the changelog for a distribution failure. Passing it lets
+          # fastlane create the betaAppLocalization rather than needing someone
+          # to fill the field in by hand once per app.
+          if [ -n "${{ inputs.beta_app_description }}" ]; then
+            ARGS+=( beta_app_description:"${{ inputs.beta_app_description }}" )
+          fi
+          if [ -n "${{ inputs.beta_app_feedback_email }}" ]; then
+            ARGS+=( beta_app_feedback_email:"${{ inputs.beta_app_feedback_email }}" )
+          fi
+
           if ! fastlane run upload_to_testflight "${ARGS[@]}"; then
-            echo "::warning::Build uploaded fine, but setting the changelog/groups failed — fill Test Information in App Store Connect or check Apple system status."
+            echo "::warning::Build uploaded, but the TestFlight metadata step failed. Look above for \"Successfully set the changelog\" - if it is there then What to Test is set and the failure is distribution, not the changelog. The usual cause is a missing Beta App Description in App Store Connect > Test Information; set the beta_app_description input to have CI fill it."
           fi
 
       - name: Summarize release
