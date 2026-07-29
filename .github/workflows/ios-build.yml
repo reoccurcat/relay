@@ -280,14 +280,28 @@ jobs:
             > "$RUNNER_TEMP/asc_key.json"
           chmod 600 "$RUNNER_TEMP/asc_key.json"
 
-      - name: Stamp version
+      # agvtool is not used for this and cannot be. It looks for INFOPLIST_FILE
+      # without excluding GENERATE_INFOPLIST_FILE, so on a project using the
+      # generated plist it tries to open one literally named "YES" - hence
+      # `Cannot find ".../YES"` in older logs - and new-marketing-version then
+      # fails to update the project setting at all. It edits the on-disk
+      # Info.plist instead, which the generated one overrides, so the tag was
+      # stamped nowhere that mattered: v1.5.2 shipped to App Store Connect as
+      # "1.5.1 - 41", the stale MARKETING_VERSION left in project.pbxproj.
+      # https://github.com/fastlane/fastlane/discussions/20062
+      #
+      # Build settings passed on the xcodebuild command line beat the project
+      # file, need no tool, and cannot half-apply. Set below on Archive.
+      - name: Version to stamp
         if: inputs.upload
-        working-directory: src/${{ steps.proj.outputs.dir }}
+        id: stamp
         run: |
-          agvtool new-version -all "${{ steps.ver.outputs.build }}"
+          ARGS="CURRENT_PROJECT_VERSION=${{ steps.ver.outputs.build }}"
           if [ -n "${{ steps.ver.outputs.marketing }}" ]; then
-            agvtool new-marketing-version "${{ steps.ver.outputs.marketing }}"
+            ARGS="$ARGS MARKETING_VERSION=${{ steps.ver.outputs.marketing }}"
           fi
+          echo "args=$ARGS" >> "$GITHUB_OUTPUT"
+          echo "stamping: $ARGS"
 
       - name: Archive
         if: inputs.upload
@@ -308,6 +322,7 @@ jobs:
             -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}" \
             CODE_SIGN_STYLE=Automatic \
             DEVELOPMENT_TEAM="${{ secrets.TEAM_ID }}" \
+            ${{ steps.stamp.outputs.args }} \
             | tee -a "$RUNNER_TEMP/build.log"
 
 
