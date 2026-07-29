@@ -303,6 +303,64 @@ jobs:
           echo "args=$ARGS" >> "$GITHUB_OUTPUT"
           echo "stamping: $ARGS"
 
+      # Supply the team's distribution certificate, so automatic signing does not
+      # go and mint another one.
+      #
+      # Automatic signing reuses a distribution identity only if the certificate
+      # *and its private key* are already in a keychain it can see. A hosted
+      # runner starts with neither, so xcodebuild -allowProvisioningUpdates,
+      # holding an ASC key entitled to create certificates, does the obvious
+      # thing: generates a keypair and issues a brand new Apple Distribution
+      # certificate. Once per upload run, forever, until the team hits Apple's
+      # cap and signing starts failing for everyone.
+      #
+      # Certificates are the scarce resource here and they belong to the *team*,
+      # so one secret covers every app this workflow builds. Provisioning
+      # profiles are free, unlimited and per-app, and automatic profile
+      # management is what makes entitlements work at all (see Show signed
+      # entitlements below) - so keep -allowProvisioningUpdates and let it
+      # handle profiles only.
+      #
+      # A throwaway keychain, never the login keychain: created here, added to
+      # the search list so xcodebuild can find it, destroyed in Scrub
+      # credentials.
+      - name: Install distribution certificate
+        if: inputs.upload
+        env:
+          DIST_CERT_P12_BASE64: ${{ secrets.DIST_CERT_P12_BASE64 }}
+          DIST_CERT_P12_PASSWORD: ${{ secrets.DIST_CERT_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DIST_CERT_P12_BASE64:-}" ]; then
+            echo "::warning::No DIST_CERT_P12_BASE64 secret is set, so automatic signing will create a NEW Apple Distribution certificate for this run, as it has for every run before it. Apple caps how many a team may hold. Add the certificate as a secret to stop this."
+            exit 0
+          fi
+
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          printf '%s' "$DIST_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          # Do not let it re-lock mid-build; the runner is torn down anyway.
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/dist.p12" -k "$KEYCHAIN" \
+            -P "$DIST_CERT_P12_PASSWORD" -A -t cert -f pkcs12 >/dev/null
+          # Without this codesign blocks on a UI authorisation prompt that no one
+          # is there to answer, and the job hangs until it times out.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          # Prepend, keeping the existing list - dropping the system keychain
+          # breaks certificate chain validation.
+          security list-keychains -d user -s "$KEYCHAIN" \
+            $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/dist.p12"
+
+          # If this prints "0 valid identities found", the import silently did
+          # nothing and the run is about to create a certificate regardless.
+          echo "signing identities available:"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
       - name: Archive
         if: inputs.upload
         working-directory: src
@@ -506,4 +564,13 @@ jobs:
 
       - name: Scrub credentials
         if: always()
-        run: rm -rf ~/.appstoreconnect "$RUNNER_TEMP/asc_key.json" src
+        run: |
+          rm -rf ~/.appstoreconnect "$RUNNER_TEMP/asc_key.json" src
+          # Take the signing keychain out of the search list before deleting it,
+          # so a reused runner is not left pointing at a keychain that is gone.
+          if [ -f "$RUNNER_TEMP/signing.keychain-db" ]; then
+            security list-keychains -d user -s \
+              $(security list-keychains -d user | tr -d '"' | grep -v signing.keychain || true)
+            security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+          fi
+          rm -f "$RUNNER_TEMP/dist.p12"
