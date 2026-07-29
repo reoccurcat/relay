@@ -467,7 +467,92 @@ jobs:
             api_key_path:"$RUNNER_TEMP/asc_key.json" \
             skip_waiting_for_build_processing:true
 
-      - name: Publish changelog and groups (best effort)
+      # Distribution is a separate step from the changelog, and it is the one
+      # that matters.
+      #
+      # `Upload to TestFlight` above passes skip_waiting_for_build_processing,
+      # so it only uploads - it does not hand the build to anybody. Assigning it
+      # to testers happens here, and until it does the build sits in App Store
+      # Connect fully processed and visible to nobody, which looks exactly like
+      # a release that never happened.
+      #
+      # These two jobs used to share one step, and one timeout killed both. A
+      # slow processing queue then cost the build itself rather than just its
+      # release notes, silently, because the step was marked continue-on-error
+      # on the assumption that release notes were all it did.
+      #
+      # Retried, because the only reason it fails in practice is App Store
+      # Connect still processing - and the fix for that is to ask again. Three
+      # attempts of ten minutes bounds it at half an hour rather than the six
+      # hour runner limit an unbounded wait allowed.
+      - name: Distribute to testers
+        if: inputs.upload
+        env:
+          FASTLANE_SKIP_UPDATE_CHECK: "1"
+          FASTLANE_HIDE_CHANGELOG: "1"
+          SPACESHIP_SKIP_2FA_UPGRADE: "1"
+        run: |
+          IPA=$(cat "$RUNNER_TEMP/ipa_path")
+          GROUPS="${{ inputs.testflight_groups }}"
+
+          # NOTE: never pass boolean:false args to `fastlane run` — CLI values
+          # arrive as strings and Ruby treats "false" as truthy. That is exactly
+          # how distribute_external:false kept triggering external beta review
+          # (and its Beta App Description requirement) on every release.
+          ARGS=(
+            ipa:"$IPA"
+            api_key_path:"$RUNNER_TEMP/asc_key.json"
+            distribute_only:true
+            build_number:"${{ steps.ver.outputs.build }}"
+            wait_processing_timeout_duration:600
+          )
+
+          if [ -n "$GROUPS" ]; then
+            ARGS+=( distribute_external:true groups:"$GROUPS" )
+          fi
+
+          # Beta App Description is an app-level field in App Store Connect's
+          # Test Information, and Apple requires it before a build reaches
+          # *external* testers. Passing it lets fastlane create the
+          # betaAppLocalization rather than needing someone to fill the field in
+          # by hand once per app.
+          if [ -n "${{ inputs.beta_app_description }}" ]; then
+            ARGS+=( beta_app_description:"${{ inputs.beta_app_description }}" )
+          fi
+          if [ -n "${{ inputs.beta_app_feedback_email }}" ]; then
+            ARGS+=( beta_app_feedback_email:"${{ inputs.beta_app_feedback_email }}" )
+          fi
+
+          # Judged on the log, not the exit code. submit_beta_review defaults to
+          # true, so fastlane tries to submit for *external* beta review after
+          # distributing, and App Store Connect has rejected that without a Beta
+          # App Description since Nov 2024 (fastlane/fastlane#28630, still open)
+          # even when fastlane set the description moments earlier. That
+          # rejection is noise here - internal testers get builds without it -
+          # and it must not be allowed to mask a distribution that worked.
+          distributed=
+          for attempt in 1 2 3; do
+            echo "distribution attempt $attempt of 3"
+            set +e
+            fastlane run upload_to_testflight "${ARGS[@]}" 2>&1 | tee "$RUNNER_TEMP/distribute.log"
+            set -e
+            if grep -q "Distributing new build to testers" "$RUNNER_TEMP/distribute.log"; then
+              distributed=yes
+              break
+            fi
+            echo "not distributed yet; App Store Connect is most likely still processing"
+          done
+
+          if [ -z "$distributed" ]; then
+            echo "::error::The build uploaded but was never distributed, so it will not appear in TestFlight for anyone. App Store Connect was still processing after three attempts. The binary is fine - add it to your tester group by hand, or re-run this job once processing finishes."
+            exit 1
+          fi
+          echo "distributed"
+
+      # Genuinely optional, unlike the step this was split out of. By the time
+      # it runs the build has already been distributed, so processing is
+      # complete and this returns quickly rather than waiting on anything.
+      - name: Set What to Test (best effort)
         if: inputs.upload
         continue-on-error: true
         env:
@@ -477,7 +562,6 @@ jobs:
         run: |
           IPA=$(cat "$RUNNER_TEMP/ipa_path")
           CHANGELOG=$(cat "$RUNNER_TEMP/changelog.md")
-          GROUPS="${{ inputs.testflight_groups }}"
 
           # Prove what is being sent. "What to Test" showing nothing has two
           # completely different causes - an empty changelog, or a changelog
@@ -486,75 +570,20 @@ jobs:
           echo "changelog: $(printf '%s' "$CHANGELOG" | wc -c) bytes"
           printf '%s\n' "$CHANGELOG" | head -5
 
-          # NOTE: never pass boolean:false args to `fastlane run` — CLI values
-          # arrive as strings and Ruby treats "false" as truthy. That is exactly
-          # how distribute_external:false kept triggering external beta review
-          # (and its Beta App Description requirement) on every release.
-          # distribute_only waits for App Store Connect to finish processing the
-          # build before it can attach anything to it, and fastlane polls for
-          # that with no timeout unless given one. So this step - marked
-          # continue-on-error precisely because it is optional - could pin a
-          # runner until GitHub's six hour limit while the binary it is waiting
-          # on had already uploaded successfully. Two releases sat like that for
-          # over an hour before anyone noticed the builds were fine and only the
-          # release notes were outstanding.
-          #
-          # 15 minutes is generous against a normal processing time of a few,
-          # and the failure is harmless: the build is already uploaded, so the
-          # only casualty is What to Test, and the check below says so.
-          ARGS=(
-            ipa:"$IPA"
-            api_key_path:"$RUNNER_TEMP/asc_key.json"
-            distribute_only:true
-            build_number:"${{ steps.ver.outputs.build }}"
-            changelog:"$CHANGELOG"
-            wait_processing_timeout_duration:900
-          )
-
-          if [ -n "$GROUPS" ]; then
-            ARGS+=( distribute_external:true groups:"$GROUPS" )
-          fi
-
-          # Beta App Description is an app-level field in App Store Connect's
-          # Test Information, and Apple requires it before a build reaches
-          # *external* testers. Without it this step fails having already set
-          # the changelog, which is why the old message below was wrong: it
-          # blamed the changelog for a distribution failure. Passing it lets
-          # fastlane create the betaAppLocalization rather than needing someone
-          # to fill the field in by hand once per app.
-          if [ -n "${{ inputs.beta_app_description }}" ]; then
-            ARGS+=( beta_app_description:"${{ inputs.beta_app_description }}" )
-          fi
-          if [ -n "${{ inputs.beta_app_feedback_email }}" ]; then
-            ARGS+=( beta_app_feedback_email:"${{ inputs.beta_app_feedback_email }}" )
-          fi
-
-          # Judged on the changelog, not on the exit code.
-          #
-          # submit_beta_review defaults to true, so fastlane always tries to
-          # submit the build for *external* beta review after setting the
-          # changelog. App Store Connect has required a Beta App Description
-          # for that since Nov 2024 and rejects it otherwise
-          # (fastlane/fastlane#28630, still open) - even when fastlane set the
-          # description moments earlier in the same run.
-          #
-          # That submission is not wanted here: internal testers get builds
-          # without it. It cannot simply be turned off either, because
-          # `fastlane run` passes CLI values as strings and Ruby treats "false"
-          # as truthy - which is how distribute_external:false used to *enable*
-          # external review, per the note above.
-          #
-          # So: the changelog is what this step exists for. If the log says it
-          # was set, the step did its job and a later beta-review rejection is
-          # noise. Only warn when the thing we actually wanted did not happen.
           set +e
-          fastlane run upload_to_testflight "${ARGS[@]}" 2>&1 | tee "$RUNNER_TEMP/pilot.log"
+          fastlane run upload_to_testflight \
+            ipa:"$IPA" \
+            api_key_path:"$RUNNER_TEMP/asc_key.json" \
+            distribute_only:true \
+            build_number:"${{ steps.ver.outputs.build }}" \
+            changelog:"$CHANGELOG" \
+            wait_processing_timeout_duration:300 2>&1 | tee "$RUNNER_TEMP/pilot.log"
           set -e
 
           if grep -q "Successfully set the changelog" "$RUNNER_TEMP/pilot.log"; then
             echo "changelog set; ignoring any beta-review submission failure after it"
           else
-            echo "::warning::Build uploaded, but the changelog was never set, so What to Test will be empty. This is the case worth looking at - a beta-review rejection after the changelog is set is expected and ignored."
+            echo "::warning::The build is distributed and installable, but the changelog was not set, so What to Test will be empty."
           fi
 
       - name: Summarize release
