@@ -434,8 +434,32 @@ jobs:
             ARGS+=( beta_app_feedback_email:"${{ inputs.beta_app_feedback_email }}" )
           fi
 
-          if ! fastlane run upload_to_testflight "${ARGS[@]}"; then
-            echo "::warning::Build uploaded, but the TestFlight metadata step failed. Look above for \"Successfully set the changelog\" - if it is there then What to Test is set and the failure is distribution, not the changelog. The usual cause is a missing Beta App Description in App Store Connect > Test Information; set the beta_app_description input to have CI fill it."
+          # Judged on the changelog, not on the exit code.
+          #
+          # submit_beta_review defaults to true, so fastlane always tries to
+          # submit the build for *external* beta review after setting the
+          # changelog. App Store Connect has required a Beta App Description
+          # for that since Nov 2024 and rejects it otherwise
+          # (fastlane/fastlane#28630, still open) - even when fastlane set the
+          # description moments earlier in the same run.
+          #
+          # That submission is not wanted here: internal testers get builds
+          # without it. It cannot simply be turned off either, because
+          # `fastlane run` passes CLI values as strings and Ruby treats "false"
+          # as truthy - which is how distribute_external:false used to *enable*
+          # external review, per the note above.
+          #
+          # So: the changelog is what this step exists for. If the log says it
+          # was set, the step did its job and a later beta-review rejection is
+          # noise. Only warn when the thing we actually wanted did not happen.
+          set +e
+          fastlane run upload_to_testflight "${ARGS[@]}" 2>&1 | tee "$RUNNER_TEMP/pilot.log"
+          set -e
+
+          if grep -q "Successfully set the changelog" "$RUNNER_TEMP/pilot.log"; then
+            echo "changelog set; ignoring any beta-review submission failure after it"
+          else
+            echo "::warning::Build uploaded, but the changelog was never set, so What to Test will be empty. This is the case worth looking at - a beta-review rejection after the changelog is set is expected and ignored."
           fi
 
       - name: Summarize release
