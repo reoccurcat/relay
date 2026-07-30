@@ -1,0 +1,45 @@
+# Caller workflow for the shared iOS pipeline.
+#
+# Lives at .github/workflows/nurture-nav.yml in reoccurcat/relay. Kept in-repo so
+# the app's build contract is reviewable alongside the app.
+#
+# Source is on GitLab, so there is no push trigger here — GitLab fires a
+# repository_dispatch into this repo. Matches studio.yml / lantern.yml exactly.
+
+name: nurture-nav
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "GitLab ref (branch or tag)"
+        required: false
+        default: "main"
+      upload:
+        description: "Ship to TestFlight"
+        type: boolean
+        required: false
+        default: false
+  repository_dispatch:
+    types: [nurture-nav-push, nurture-nav-release]
+
+concurrency:
+  group: relay-nurture-nav-${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/ios-build.yml
+    with:
+      app_name: NurtureNav
+      gitlab_path: nurture-labs-llc/nurture-nav
+      project_path: ios/NurtureNav.xcodeproj
+      scheme: NurtureNav
+      ref: ${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
+      # TestFlight only on a release dispatch or an explicit manual tick.
+      upload: >-
+        ${{ github.event.action == 'nurture-nav-release'
+            || github.event.inputs.upload == 'true' }}
+      # Tags always follow a green main compile — don't re-test on release.
+      run_tests: ${{ github.event.action != 'nurture-nav-release' }}
+    secrets: inherit
