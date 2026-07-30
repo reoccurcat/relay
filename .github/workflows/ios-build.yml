@@ -52,6 +52,17 @@ on:
         required: false
         type: string
         default: "platform=iOS Simulator,name=iPhone 16,OS=latest"
+      package_path:
+        description: >-
+          Path (relative to the repo root) to a Swift package whose tests run
+          natively with `swift test` — no simulator. Empty = no native tests.
+          An app opts in by extracting its platform-agnostic sources into a
+          package; see nurture-nav's ios/Package.swift for the pattern. Apps
+          that set this usually also set run_tests: false, which drops the
+          simulator from the pipeline entirely.
+        required: false
+        type: string
+        default: ""
       testflight_groups:
         description: "Comma-separated external tester groups. Empty = internal testers only."
         required: false
@@ -296,6 +307,17 @@ jobs:
             ${{ steps.proj.outputs.flag }} "${{ inputs.project_path }}" \
             -scheme "${{ inputs.scheme }}" \
             -clonedSourcePackagesDirPath "$SPM_CACHE"
+
+      # Native tests: no simulator, no Xcode project, no app launch. Runs before
+      # the heavier steps so a logic regression fails in seconds rather than after
+      # an archive. Uses the toolchain already selected by "Select Xcode".
+      - name: Test package (native)
+        if: inputs.package_path != ''
+        working-directory: src
+        run: |
+          set -o pipefail
+          swift test --package-path "${{ inputs.package_path }}" 2>&1 \
+            | tee -a "$RUNNER_TEMP/build.log"
 
       - name: Test
         if: inputs.run_tests
