@@ -162,12 +162,35 @@ jobs:
           echo "build=$BUILD_NUM" >> "$GITHUB_OUTPUT"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
-          # Marketing version comes from the tag when building one; otherwise leave the project alone.
+          # Marketing version: the tag when building one, otherwise the most
+          # recent tag reachable from HEAD.
+          #
+          # "Leave the project alone" was the wrong default. project.pbxproj
+          # keeps whatever MARKETING_VERSION was last committed, and since the
+          # tag became the source of truth nobody edits it - so a manual
+          # dispatch shipped stamped with a stale number. Build 47, the newest
+          # binary at the time, went to TestFlight labelled 1.5.1 while 1.5.7
+          # was already out. A version list where newer builds wear older
+          # numbers is worse than one that repeats a number.
+          #
+          # Falling back to the last tag says "based on 1.6.0", which is true
+          # and sorts correctly. App Store Connect distinguishes builds by build
+          # number anyway, and that is derived from the commit count.
           if git describe --exact-match --tags HEAD >/dev/null 2>&1; then
             TAG=$(git describe --exact-match --tags HEAD)
             echo "marketing=${TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "version from exact tag: ${TAG#v}"
           else
-            echo "marketing=" >> "$GITHUB_OUTPUT"
+            LAST=$(git describe --tags --abbrev=0 HEAD 2>/dev/null || echo "")
+            if [ -n "$LAST" ]; then
+              echo "marketing=${LAST#v}" >> "$GITHUB_OUTPUT"
+              echo "no tag on HEAD; using most recent reachable tag: ${LAST#v}"
+            else
+              # No tags at all. Only here is leaving the project's value alone
+              # correct, because there is nothing better to say.
+              echo "marketing=" >> "$GITHUB_OUTPUT"
+              echo "::warning::No tags reachable from HEAD, so MARKETING_VERSION is left at whatever project.pbxproj carries. Tag a release to control the version."
+            fi
           fi
 
           PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
