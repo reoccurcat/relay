@@ -40,6 +40,12 @@ jobs:
       upload: >-
         ${{ github.event.action == 'nurture-nav-release'
             || github.event.inputs.upload == 'true' }}
-      # Tags always follow a green main compile — don't re-test on release.
-      run_tests: ${{ github.event.action != 'nurture-nav-release' }}
+      # The suite lives in ios/Package.swift and runs natively via `swift test`
+      # on every build, release included — it costs seconds and needs no
+      # simulator. run_tests stays false so xcodebuild never boots one: the
+      # non-upload path compiles for a device destination instead, which catches
+      # the same breakage. This also lets push and release share one warm
+      # DerivedData cache, since both now build Release-iphoneos.
+      run_tests: false
+      package_path: ios
     secrets: inherit
