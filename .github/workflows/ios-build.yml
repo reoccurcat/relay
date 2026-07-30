@@ -351,6 +351,7 @@ jobs:
         if: inputs.upload
         env:
           DIST_CERT_P12_BASE64: ${{ secrets.DIST_CERT_P12_BASE64 }}
+          DEV_CERT_P12_BASE64: ${{ secrets.DEV_CERT_P12_BASE64 }}
           DIST_CERT_P12_PASSWORD: ${{ secrets.DIST_CERT_P12_PASSWORD }}
         run: |
           set -euo pipefail
@@ -361,14 +362,36 @@ jobs:
 
           KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
           KEYCHAIN_PASSWORD=$(uuidgen)
-          printf '%s' "$DIST_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/dist.p12"
 
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           # Do not let it re-lock mid-build; the runner is torn down anyway.
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          # Both identities, because automatic signing provisions a *development*
+          # profile alongside the distribution one and will mint an Apple
+          # Development certificate to satisfy it. Installing only the
+          # distribution cert stopped one leak and left the other running at one
+          # per build, until that type hit its own cap and every archive failed
+          # with "Choose a certificate to revoke" - while the check here still
+          # reported "1 valid identities found", because it only ever asked about
+          # codesigning identities.
+          #
+          # Two blobs rather than one: `openssl pkcs12 -export` takes a single
+          # key, so the certificates cannot be merged into one bundle. Same
+          # password for both.
+          printf '%s' "$DIST_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/dist.p12"
           security import "$RUNNER_TEMP/dist.p12" -k "$KEYCHAIN" \
             -P "$DIST_CERT_P12_PASSWORD" -A -t cert -f pkcs12 >/dev/null
+
+          if [ -n "${DEV_CERT_P12_BASE64:-}" ]; then
+            printf '%s' "$DEV_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/dev.p12"
+            security import "$RUNNER_TEMP/dev.p12" -k "$KEYCHAIN" \
+              -P "$DIST_CERT_P12_PASSWORD" -A -t cert -f pkcs12 >/dev/null
+            rm -f "$RUNNER_TEMP/dev.p12"
+          else
+            echo "::warning::No DEV_CERT_P12_BASE64 secret. Automatic signing provisions a development profile too, so it will create a new Apple Development certificate for this run - the same leak the distribution cert fixed, one type over. Apple caps these as well."
+          fi
           # Without this codesign blocks on a UI authorisation prompt that no one
           # is there to answer, and the job hangs until it times out.
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
@@ -379,10 +402,13 @@ jobs:
             $(security list-keychains -d user | tr -d '"')
           rm -f "$RUNNER_TEMP/dist.p12"
 
-          # If this prints "0 valid identities found", the import silently did
-          # nothing and the run is about to create a certificate regardless.
+          # Every identity, not just codesigning ones. Filtering to codesigning
+          # is what let a missing *development* certificate report success right
+          # up until the archive failed on it.
           echo "signing identities available:"
-          security find-identity -v -p codesigning "$KEYCHAIN"
+          security find-identity -v "$KEYCHAIN"
+          echo "expecting both an Apple Distribution and an Apple Development identity;"
+          echo "a missing Development one means the next archive will create it and may hit Apple's cap."
 
           # Distribution certificates last a year, and this one signs every app
           # built by this workflow - so the day it lapses, all of them stop
