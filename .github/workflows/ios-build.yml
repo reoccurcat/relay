@@ -99,6 +99,56 @@ jobs:
           sudo xcode-select -s "/Applications/Xcode_${{ inputs.xcode_version }}.app/Contents/Developer"
           xcodebuild -version
 
+      # Booting a simulator is the single most expensive thing in a test run —
+      # measured at 150-346s, dwarfing the ~20-60s compile. It does not depend on
+      # the source, so start it here and let it boot while we clone, resolve and
+      # compile. The Test step then waits on whatever is left instead of all of it.
+      #
+      # Runtime choice matters: picking newest-available lands on a runtime that
+      # lives on its own mounted CoreSimulator volume, and first touch of that
+      # volume is where the 150 -> 346s variance came from. Prefer the runtime
+      # matching the selected Xcode's SDK, which is already local.
+      - name: Boot simulator (background)
+        if: inputs.run_tests
+        run: |
+          set -uo pipefail
+          SDK_VERSION=$(xcrun --sdk iphonesimulator --show-sdk-version)   # e.g. 26.0
+          WANTED="iOS-${SDK_VERSION//./-}"                                # e.g. iOS-26-0
+          echo "Xcode ships iOS SDK $SDK_VERSION; preferring runtime $WANTED"
+
+          # jq selects the single udid itself rather than piping to `head`, which
+          # would SIGPIPE jq and trip pipefail. An empty result is reported as ""
+          # and handled below, so no `set -e` is wanted here.
+          pick() {
+            xcrun simctl list devices available --json | jq -r --arg want "$1" '
+              [ .devices | to_entries[]
+                | select(.key | contains("iOS"))
+                | select($want == "" or (.key | contains($want)))
+              ] | sort_by(.key) | reverse
+                | [ .[].value[] | select(.name | startswith("iPhone")) | .udid ]
+                | .[0] // ""'
+          }
+
+          UDID=$(pick "$WANTED")
+          if [ -z "$UDID" ]; then
+            echo "::notice::No iPhone on runtime $WANTED; falling back to newest available."
+            UDID=$(pick "")
+          fi
+          if [ -z "$UDID" ]; then
+            echo "::error::no iPhone simulator on this image"
+            xcrun simctl list devices available
+            exit 1
+          fi
+
+          echo "SIM_UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl list devices available | grep -F "$UDID" || true
+
+          # Detached: this step must return immediately so the boot overlaps the
+          # build. The Test step joins via `simctl bootstatus`, which is a no-op
+          # once the device is already booted.
+          nohup xcrun simctl bootstatus "$UDID" -b >"$RUNNER_TEMP/simboot.log" 2>&1 &
+          echo "boot started for $UDID"
+
       # NOTE: full history on purpose — `git rev-list --count` needs it.
       # --depth 1 would make every build number 1.
       - name: Clone source from GitLab
@@ -222,14 +272,22 @@ jobs:
       # DerivedData across runs: the run_id key never exact-hits, so every run
       # restores the newest previous cache (restore-keys) and saves its own —
       # combined with commit-time mtimes above, unchanged Swift files skip
-      # recompilation entirely. If a cache ever goes weird, bump the "dd1"
-      # prefix to bust it.
+      # recompilation entirely. If a cache ever goes weird, bump the "dd" prefix
+      # to bust it.
+      #
+      # The flavour segment is load-bearing. Test runs build
+      # Debug-iphonesimulator; archive and compile-only runs build
+      # Release-iphoneos. Sharing one key made them alternate and overwrite each
+      # other, so every run restored ~62MB of the other flavour's artifacts,
+      # hit them for nothing, and recompiled from scratch. Measured: a test run
+      # restoring a test cache compiled in 19s, one restoring an archive cache
+      # took 62s for identical source.
       - name: Cache DerivedData
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/DerivedData
-          key: dd1-${{ inputs.app_name }}-${{ inputs.xcode_version }}-${{ github.run_id }}
-          restore-keys: dd1-${{ inputs.app_name }}-${{ inputs.xcode_version }}-
+          key: dd2-${{ inputs.app_name }}-${{ inputs.xcode_version }}-${{ inputs.run_tests && 'test' || 'archive' }}-${{ github.run_id }}
+          restore-keys: dd2-${{ inputs.app_name }}-${{ inputs.xcode_version }}-${{ inputs.run_tests && 'test' || 'archive' }}-
 
       - name: Resolve dependencies
         working-directory: src
@@ -244,14 +302,17 @@ jobs:
         working-directory: src
         run: |
           set -o pipefail
-          # Pick the newest-runtime iPhone simulator actually present on this
-          # image — device names churn with every Xcode release.
-          UDID=$(xcrun simctl list devices available --json | jq -r '
-            [.devices | to_entries[]
-             | select(.key | contains("iOS"))
-            ] | sort_by(.key) | reverse
-              | .[].value[] | select(.name | startswith("iPhone")) | .udid' | head -n 1)
-          test -n "$UDID" || { echo "::error::no iPhone simulator on this image"; xcrun simctl list devices available; exit 1; }
+          # Chosen and boot-started back in "Boot simulator (background)", which
+          # runs before the clone so the boot overlaps the compile.
+          UDID="${SIM_UDID:-}"
+          test -n "$UDID" || { echo "::error::SIM_UDID unset — did the boot step run?"; exit 1; }
+
+          # Join the background boot. Returns immediately if it already finished;
+          # otherwise waits out whatever the build did not cover.
+          echo "Waiting for simulator $UDID to finish booting..."
+          time xcrun simctl bootstatus "$UDID" -b
+          cat "$RUNNER_TEMP/simboot.log" 2>/dev/null || true
+
           echo "Testing on simulator $UDID"
           xcodebuild test \
             ${{ steps.proj.outputs.flag }} "${{ inputs.project_path }}" \
