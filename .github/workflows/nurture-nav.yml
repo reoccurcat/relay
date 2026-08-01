@@ -62,4 +62,16 @@ jobs:
       export_by_hand: true
       asc_app_id: "6796454127"
       resign_bundle_ids: "io.nurturelabs.nav io.nurturelabs.nav.watchkitapp"
+      # actool needs a watchOS *simulator* runtime even for a device build, and
+      # the macos-15 image does not ship one matching Xcode 26's watchsimulator
+      # SDK. Several gigabytes, and it fails transiently with "Unable to connect
+      # to simulator", so the step retries.
+      #
+      # This was removed once on the reasoning that the watch app did not need an
+      # asset catalog at all — that only export validation wanted the icon, and
+      # packaging by hand had removed export validation. Half right: App Store
+      # Connect validates too, and refuses the upload outright with "Missing
+      # Icons" and "A value for the Info.plist key 'CFBundleIconName' is
+      # missing". The icon is not optional, so neither is this.
+      download_platforms: watchOS
     secrets: inherit
