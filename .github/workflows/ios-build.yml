@@ -142,10 +142,22 @@ jobs:
       - name: Download extra platforms
         if: inputs.download_platforms != ''
         run: |
+          # Retried, because this fails transiently with "Unable to connect to
+          # simulator" — the same invocation succeeds on the next run. A flaky
+          # download should not read as a broken app.
           for platform in ${{ inputs.download_platforms }}; do
-            echo "downloading $platform"
-            sudo xcodebuild -downloadPlatform "$platform"
+            ok=""
+            for attempt in 1 2 3; do
+              echo "downloading $platform (attempt $attempt)"
+              if sudo xcodebuild -downloadPlatform "$platform"; then ok=1; break; fi
+              sleep 20
+            done
+            if [ -z "$ok" ]; then
+              echo "could not download $platform after 3 attempts"
+              exit 1
+            fi
           done
+          xcrun simctl list runtimes | grep -i watch || true
 
       # Booting a simulator is the single most expensive thing in a test run —
       # measured at 150-346s, dwarfing the ~20-60s compile. It does not depend on
