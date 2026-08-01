@@ -63,19 +63,27 @@ jobs:
       # DerivedData cache, since both now build Release-iphoneos.
       run_tests: false
       package_path: ios
-      # Package the IPA by hand and re-sign it for distribution.
+      # Hand packaging is off again, and the whole apparatus behind it was built
+      # on a misdiagnosis.
       #
-      # This exists for the watch app: IDEDistribution cannot export an archive
-      # containing one under Xcode 26, reporting the set of valid distribution
-      # methods as empty on 26.0 and 26.1.1 alike. Packaging from the archive
-      # skips it entirely.
+      # It existed because IDEDistribution reported no valid distribution
+      # methods for an archive containing a watch app, which was read as an
+      # Xcode 26 defect. export_probe put that to the test against every Xcode
+      # on the image: 16.0 through 26.3 all failed identically, which no 26.x
+      # regression can explain. The archive was carrying two installable
+      # products, because the watch target was missing SKIP_INSTALL. One line in
+      # the project, and all twenty exporters succeed.
       #
-      # Proven on the phone app alone first, in 0.3.26 build 105 — "UPLOAD
-      # SUCCEEDED with no errors" against an IPA signed "Apple Distribution"
-      # where the archive itself is signed "Apple Development". The watch app is
-      # the second bundle id here and nothing else changed.
-      export_by_hand: true
+      # So xcodebuild packages and re-signs this again, and it is worth saying
+      # what it does differently from four days of hand packaging: it leaves the
+      # watch app in PlugIns/ and writes no WatchKitSupport2/ at all. Both moves
+      # were invented to satisfy rejections that the malformed archive had
+      # caused. Xcode's own output for app-store-connect is the reference here,
+      # not our reasoning about it.
+      export_by_hand: false
       asc_app_id: "6796454127"
+      # Inert while export_by_hand is false — the fetch and re-sign steps are
+      # gated on it. Kept because it is correct, and cost a session to get right.
       resign_bundle_ids: "io.nurturelabs.nav io.nurturelabs.nav.watchkitapp"
       # actool needs a watchOS *simulator* runtime even for a device build, and
       # the macos-15 image does not ship one matching Xcode 26's watchsimulator
