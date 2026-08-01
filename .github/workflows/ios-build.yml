@@ -704,9 +704,21 @@ jobs:
           test -n "$IPA" || { echo "::error::no .ipa produced"; exit 1; }
           echo "$IPA" > "$RUNNER_TEMP/ipa_path"
 
-          xcrun altool --upload-app -f "$IPA" -t ios \
+          # --platform, not -t. altool asks for it by that name, and -t is the
+          # older spelling it no longer infers from.
+          #
+          # And its exit code cannot be trusted: it printed "ERROR: Cannot
+          # determine the platform" and exited 0, so the step went green with
+          # nothing uploaded. The output is checked as well as the status.
+          set -o pipefail
+          xcrun altool --upload-app -f "$IPA" --platform ios \
             --apiKey "${{ secrets.ASC_KEY_ID }}" \
-            --apiIssuer "${{ secrets.ASC_ISSUER_ID }}"
+            --apiIssuer "${{ secrets.ASC_ISSUER_ID }}" 2>&1 | tee "$RUNNER_TEMP/altool.log"
+
+          if grep -q 'ERROR' "$RUNNER_TEMP/altool.log"; then
+            echo "::error::altool reported an error but exited 0 — see above"
+            exit 1
+          fi
 
       - name: Upload to TestFlight
         if: inputs.upload && !inputs.export_by_hand
