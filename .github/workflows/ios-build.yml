@@ -46,6 +46,12 @@ on:
         required: false
         type: string
         default: ""
+      # Package the IPA from the archive rather than asking xcodebuild to export
+      # it. See "Package IPA from the archive" for when that is worth doing.
+      export_by_hand:
+        required: false
+        type: boolean
+        default: false
       runner:
         required: false
         type: string
@@ -571,8 +577,47 @@ jobs:
             | tee -a "$RUNNER_TEMP/build.log"
 
 
+      # Packages the IPA straight out of the archive, skipping xcodebuild's
+      # exporter.
+      #
+      # The archive above is already signed for distribution — automatic signing,
+      # the team's certificate, a profile fetched with the ASC key — so an IPA is
+      # that .app inside a Payload directory, zipped. What -exportArchive adds on
+      # top is a re-sign and a pass through IDEDistribution.
+      #
+      # IDEDistribution is exactly what cannot handle an archive containing a
+      # watch app under Xcode 26: it reports the set of valid distribution
+      # methods as empty and then rejects app-store-connect against nothing, on
+      # 26.0 and 26.1.1 alike. Not the 26.2 automatic-signing regression Apple
+      # has acknowledged — this reproduces on versions older than that one.
+      #
+      # The cost is real and worth stating: no re-signing and no validation, so
+      # whatever the archive is signed with is what ships, and a malformed bundle
+      # is App Store Connect's problem rather than xcodebuild's. Off by default;
+      # only an app that cannot export any other way should take that trade.
+      - name: Package IPA from the archive
+        if: inputs.upload && inputs.export_by_hand
+        run: |
+          set -euo pipefail
+          ARCHIVE="$RUNNER_TEMP/${{ inputs.app_name }}.xcarchive"
+          APP="$ARCHIVE/Products/Applications/${{ inputs.app_name }}.app"
+          test -d "$APP" || { echo "no ${{ inputs.app_name }}.app in $ARCHIVE"; ls -R "$ARCHIVE/Products" || true; exit 1; }
+
+          rm -rf "$RUNNER_TEMP/export"
+          mkdir -p "$RUNNER_TEMP/export/Payload"
+          # -R follows the bundle; symlinks inside frameworks are preserved by
+          # zip -y below.
+          cp -R "$APP" "$RUNNER_TEMP/export/Payload/"
+          ( cd "$RUNNER_TEMP/export" && zip -qry "${{ inputs.app_name }}.ipa" Payload )
+          rm -rf "$RUNNER_TEMP/export/Payload"
+
+          echo "packaged:"
+          ls -la "$RUNNER_TEMP/export"
+          echo "watch content, if any:"
+          find "$APP" -maxdepth 3 -name '*.app' -not -path "$APP" || true
+
       - name: Export IPA
-        if: inputs.upload
+        if: inputs.upload && !inputs.export_by_hand
         run: |
           cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>

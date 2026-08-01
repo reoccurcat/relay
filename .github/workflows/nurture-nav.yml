@@ -48,4 +48,11 @@ jobs:
       # DerivedData cache, since both now build Release-iphoneos.
       run_tests: false
       package_path: ios
+      # The watch app's icons need a watchOS simulator runtime the image does not
+      # ship: actool consults one even when compiling for a device.
+      download_platforms: watchOS
+      # And xcodebuild cannot export an archive that contains a watch app under
+      # Xcode 26 — IDEDistribution reports no valid distribution methods at all.
+      # The archive itself is fine and already signed, so it is packaged by hand.
+      export_by_hand: true
     secrets: inherit
