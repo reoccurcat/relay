@@ -573,6 +573,16 @@ jobs:
           fi
           rm -f "$RUNNER_TEMP/signing-cert.pem"
 
+      # Archives with a distribution identity when the IPA will be packaged by
+      # hand.
+      #
+      # Automatic signing archives with a development profile and lets
+      # -exportArchive re-sign for distribution afterwards. Skip the export and
+      # nothing re-signs, so App Store Connect refuses the upload: "Invalid
+      # Provisioning Profile ... [Missing code-signing certificate]. A
+      # distribution provisioning profile should be used." Asking for the
+      # distribution identity up front makes the archive already be what gets
+      # uploaded — which is the whole premise of packaging it by hand.
       - name: Archive
         if: inputs.upload
         working-directory: src
@@ -592,6 +602,7 @@ jobs:
             -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}" \
             CODE_SIGN_STYLE=Automatic \
             DEVELOPMENT_TEAM="${{ secrets.TEAM_ID }}" \
+            ${{ inputs.export_by_hand && 'CODE_SIGN_IDENTITY="Apple Distribution"' || '' }} \
             ${{ steps.stamp.outputs.args }} \
             | tee -a "$RUNNER_TEMP/build.log"
 
