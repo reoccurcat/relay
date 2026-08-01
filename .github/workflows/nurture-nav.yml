@@ -74,13 +74,19 @@ jobs:
       # products, because the watch target was missing SKIP_INSTALL. One line in
       # the project, and all twenty exporters succeed.
       #
-      # So xcodebuild packages and re-signs this again, and it is worth saying
-      # what it does differently from four days of hand packaging: it leaves the
-      # watch app in PlugIns/ and writes no WatchKitSupport2/ at all. Both moves
-      # were invented to satisfy rejections that the malformed archive had
-      # caused. Xcode's own output for app-store-connect is the reference here,
-      # not our reasoning about it.
-      export_by_hand: false
+      # It was briefly switched off on the strength of that, and switched back:
+      # xcodebuild's export leaves the watch app in PlugIns/, and App Store
+      # Connect refuses it at upload with "not contained in a correctly named
+      # directory. It should be under Watch." Xcode 26's own app-store-connect
+      # output is not something the store accepts.
+      #
+      # So the packaging step was doing two jobs, and only one of them has gone
+      # away. It stood in for an exporter believed broken — unnecessary now —
+      # and it puts the bundle where the store wants it, which is still the only
+      # thing that does. The same rejection also explains altool's "Cannot
+      # determine the platform" on an exported IPA: it classified build 110
+      # without complaint, and that one had Watch/ and the stub.
+      export_by_hand: true
       asc_app_id: "6796454127"
       # An IPA carrying a watch app holds two platforms, and fastlane's uploader
       # cannot state which — it passes app_platform:"ios" and altool still
