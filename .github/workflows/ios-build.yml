@@ -101,6 +101,13 @@ on:
         required: false
         type: boolean
         default: false
+      # Ask the only question underneath all of the hand packaging: can
+      # xcodebuild's own exporter handle this archive under *any* Xcode on the
+      # image? See the probe step for why that is suddenly worth re-asking.
+      export_probe:
+        required: false
+        type: boolean
+        default: false
       runner:
         required: false
         type: string
@@ -644,6 +651,95 @@ jobs:
             ${{ steps.stamp.outputs.args }} \
             | tee -a "$RUNNER_TEMP/build.log"
 
+
+      # Can xcodebuild's own exporter handle this archive under any Xcode here?
+      #
+      # This is the question underneath every hand-packaging problem. Xcode 26.0
+      # reports the set of valid distribution methods as empty for an archive
+      # containing a watch app, so the IPA is assembled by hand instead — and
+      # Apple has now rejected that IPA with ITMS-90486 under every layout, stub
+      # and altool mode it has been given.
+      #
+      # Worth re-asking because Apple's own reports say 26.1 exports watch apps
+      # fine and 26.2 regressed. 26.1.1 was tried here and could not export
+      # anything at all, which was recorded as a second, separate bug. More
+      # likely it is the ordinary state of a freshly imaged runner: an Xcode
+      # that has never been opened has no distribution components installed.
+      # `-runFirstLaunch` installs exactly those, and was never run.
+      #
+      # So try every Xcode present, registering components first. This costs no
+      # build number and asks Apple nothing — the exporter either produces an
+      # IPA or it does not. One success deletes all of the hand packaging, and
+      # with it every bundle-layout question that has been guessed at since.
+      - name: Probe -exportArchive across Xcodes
+        if: inputs.upload && inputs.export_probe
+        run: |
+          set -uo pipefail
+          ORIGINAL=$(xcode-select -p)
+
+          cat > "$RUNNER_TEMP/ProbeExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>teamID</key><string>${{ secrets.TEAM_ID }}</string>
+          </dict>
+          </plist>
+          PLIST
+
+          WORKED=""
+          for APPDIR in /Applications/Xcode*.app; do
+            VER=$(basename "$APPDIR" .app)
+            echo "==================== $VER"
+            sudo xcode-select -s "$APPDIR/Contents/Developer" || continue
+            xcodebuild -version || continue
+
+            # The whole point of the probe. Silent on an image where it has
+            # already run, several minutes where it has not.
+            echo "--- runFirstLaunch"
+            sudo xcodebuild -runFirstLaunch 2>&1 | tail -5 || true
+
+            rm -rf "$RUNNER_TEMP/probe/$VER"
+            if xcodebuild -exportArchive \
+                 -archivePath "$RUNNER_TEMP/${{ inputs.app_name }}.xcarchive" \
+                 -exportPath "$RUNNER_TEMP/probe/$VER" \
+                 -exportOptionsPlist "$RUNNER_TEMP/ProbeExportOptions.plist" \
+                 -allowProvisioningUpdates \
+                 -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8 \
+                 -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
+                 -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}" \
+                 2>&1 | tee "$RUNNER_TEMP/probe-$VER.log" | tail -25
+            then
+              echo "PROBE PASS: $VER exported"
+              ls -la "$RUNNER_TEMP/probe/$VER" || true
+              WORKED="$WORKED $VER"
+            else
+              echo "PROBE FAIL: $VER"
+              grep -iE 'error|distribution method|not supported|empty' \
+                "$RUNNER_TEMP/probe-$VER.log" | sort -u | head -10 || true
+            fi
+          done
+
+          sudo xcode-select -s "$ORIGINAL"
+          echo "==================== exporters that worked:${WORKED:- none}"
+          {
+            echo "### -exportArchive probe"
+            echo "worked:${WORKED:- none}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the probe output
+        if: inputs.upload && inputs.export_probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.app_name }}-export-probe-${{ steps.ver.outputs.build }}
+          path: |
+            ${{ runner.temp }}/probe/**/*.ipa
+            ${{ runner.temp }}/probe-*.log
+          retention-days: 5
+          if-no-files-found: warn
 
       # Packages the IPA straight out of the archive, skipping xcodebuild's
       # exporter.
