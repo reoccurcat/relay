@@ -682,8 +682,14 @@ jobs:
           test -n "$IPA" || { echo "::error::no .ipa produced"; exit 1; }
           echo "$IPA" > "$RUNNER_TEMP/ipa_path"
 
+          # platform is stated rather than inferred. altool reads it out of
+          # metadata that -exportArchive leaves behind, so an IPA packaged by
+          # hand fails with "Cannot determine the platform; please specify
+          # --platform." Harmless on the exported path, which reaches the same
+          # answer on its own.
           fastlane run upload_to_testflight \
             ipa:"$IPA" \
+            platform:"ios" \
             api_key_path:"$RUNNER_TEMP/asc_key.json" \
             skip_waiting_for_build_processing:true
 
