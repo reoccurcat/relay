@@ -788,6 +788,28 @@ jobs:
             fi
           fi
 
+          # Exactly what App Store Connect is about to receive.
+          #
+          # Worth the few lines: three uploads in a row were diagnosed by reading
+          # Apple's rejection and reasoning backwards about what the IPA probably
+          # looked like, when the answer was one `unzip -l` away. ITMS rejections
+          # name a path — being able to compare that path against the real archive
+          # turns a guess into a check.
+          echo "--- IPA layout as uploaded ---"
+          unzip -l "$RUNNER_TEMP/export/${{ inputs.app_name }}.ipa" \
+            | awk '{ print $NF }' | grep -E '\.app/$|^Payload/|WatchKitSupport2' \
+            | grep -vE '\.app/.+/' | sort -u | head -40
+          WATCH_BUNDLE=$(find "$RUNNER_TEMP/export/Payload" -maxdepth 3 -name '*.app' \
+            -not -path "$PAYLOAD_APP" | head -1)
+          if [ -n "$WATCH_BUNDLE" ]; then
+            echo "--- watch bundle: $WATCH_BUNDLE"
+            plutil -p "$WATCH_BUNDLE/Info.plist" 2>/dev/null \
+              | grep -Ei 'WKApplication|WKWatchKitApp|WKCompanion|CFBundleIdentifier|CFBundleExecutable|CFBundleIconName|CFBundleVersion|CFBundleShortVersion|UIDeviceFamily|DTPlatformName|MinimumOSVersion' \
+              || echo "  (could not read Info.plist)"
+          else
+            echo "--- no nested .app found in the payload"
+          fi
+
           rm -rf "$RUNNER_TEMP/export/Payload"
 
           echo "packaged:"
