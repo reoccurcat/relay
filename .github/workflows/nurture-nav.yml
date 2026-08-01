@@ -99,9 +99,14 @@ jobs:
       # by a search about apps with a watch *extension*, which this is not, and
       # Xcode's own export of this archive writes no stub at all.
       skip_watchkit_stub: true
-      # Inert while export_by_hand is false — the fetch and re-sign steps are
-      # gated on it. Kept because it is correct, and cost a session to get right.
-      resign_bundle_ids: "io.nurturelabs.nav io.nurturelabs.nav.watchkitapp"
+      # Every nested bundle needs its own App Store profile, or packaging signs it
+      # with none and Apple refuses the upload: "Invalid Provisioning Profile ...
+      # in the io.nurturelabs.nav.widgets bundle". The widget extension was added
+      # in 0.3.32 and this list was not, which cost build 142.
+      resign_bundle_ids: >-
+        io.nurturelabs.nav
+        io.nurturelabs.nav.watchkitapp
+        io.nurturelabs.nav.widgets
       # actool needs a watchOS *simulator* runtime even for a device build, and
       # the macos-15 image does not ship one matching Xcode 26's watchsimulator
       # SDK. Several gigabytes, and it fails transiently with "Unable to connect
