@@ -688,8 +688,28 @@ jobs:
       # Waiting for processing, writing "What to Test", and assigning groups
       # happen in the best-effort step below; an ASC hiccup there is a warning,
       # not a red run.
+      # altool, directly, for the hand-packaged path.
+      #
+      # fastlane accepts app_platform and does not pass it through, so altool
+      # still refuses an IPA it cannot classify — and an IPA packaged by hand
+      # carries none of the metadata it would classify it by. altool takes -t
+      # itself, so this says it there.
+      #
+      # The .p8 is already on disk from "Write App Store Connect credentials";
+      # altool finds it by key id.
+      - name: Upload to TestFlight (altool)
+        if: inputs.upload && inputs.export_by_hand
+        run: |
+          IPA=$(find "$RUNNER_TEMP/export" -maxdepth 1 -name '*.ipa' | head -1)
+          test -n "$IPA" || { echo "::error::no .ipa produced"; exit 1; }
+          echo "$IPA" > "$RUNNER_TEMP/ipa_path"
+
+          xcrun altool --upload-app -f "$IPA" -t ios \
+            --apiKey "${{ secrets.ASC_KEY_ID }}" \
+            --apiIssuer "${{ secrets.ASC_ISSUER_ID }}"
+
       - name: Upload to TestFlight
-        if: inputs.upload
+        if: inputs.upload && !inputs.export_by_hand
         env:
           FASTLANE_SKIP_UPDATE_CHECK: "1"
           FASTLANE_HIDE_CHANGELOG: "1"
