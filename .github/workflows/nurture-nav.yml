@@ -48,4 +48,13 @@ jobs:
       # DerivedData cache, since both now build Release-iphoneos.
       run_tests: false
       package_path: ios
+      # Pinned ahead of the 26.0 default for the watch app's asset catalog.
+      # actool consults simulator runtimes even when compiling for a device, and
+      # 26.0's watchsimulator SDK (23R351) has no matching runtime on the
+      # macos-15 image — only 22T572, 23S36 and 23S303 are installed — so
+      # compiling the watch icons fails outright with the catalog present and
+      # export fails on a missing icon without it. Pinning is free; the
+      # alternative, `xcodebuild -downloadPlatform watchOS`, pulls several GB on
+      # every run and would slow the other three apps for nothing.
+      xcode_version: "26.1.1"
     secrets: inherit
