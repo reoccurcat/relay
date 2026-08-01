@@ -77,6 +77,17 @@ on:
         required: false
         type: string
         default: ""
+      # Build, package and re-sign, then stop and hand the IPA back as an
+      # artifact instead of sending it to Apple.
+      #
+      # Iterating on packaging through real uploads costs a build, a full
+      # processing wait and an ITMS rejection email per attempt, and answers
+      # only the one question Apple happened to check first. The IPA itself
+      # answers all of them at once and takes half the time to get.
+      package_only:
+        required: false
+        type: boolean
+        default: false
       runner:
         required: false
         type: string
@@ -873,7 +884,7 @@ jobs:
       # The .p8 is already on disk from "Write App Store Connect credentials";
       # altool finds it by key id.
       - name: Upload to TestFlight (altool)
-        if: inputs.upload && inputs.export_by_hand
+        if: inputs.upload && inputs.export_by_hand && !inputs.package_only
         run: |
           IPA=$(find "$RUNNER_TEMP/export" -maxdepth 1 -name '*.ipa' | head -1)
           test -n "$IPA" || { echo "::error::no .ipa produced"; exit 1; }
@@ -917,7 +928,7 @@ jobs:
           fi
 
       - name: Upload to TestFlight
-        if: inputs.upload && !inputs.export_by_hand
+        if: inputs.upload && !inputs.export_by_hand && !inputs.package_only
         env:
           FASTLANE_SKIP_UPDATE_CHECK: "1"
           FASTLANE_HIDE_CHANGELOG: "1"
@@ -957,7 +968,7 @@ jobs:
       # attempts of ten minutes bounds it at half an hour rather than the six
       # hour runner limit an unbounded wait allowed.
       - name: Distribute to testers
-        if: inputs.upload
+        if: inputs.upload && !inputs.package_only
         env:
           FASTLANE_SKIP_UPDATE_CHECK: "1"
           FASTLANE_HIDE_CHANGELOG: "1"
@@ -1038,7 +1049,7 @@ jobs:
       # it runs the build has already been distributed, so processing is
       # complete and this returns quickly rather than waiting on anything.
       - name: Set What to Test (best effort)
-        if: inputs.upload
+        if: inputs.upload && !inputs.package_only
         continue-on-error: true
         env:
           FASTLANE_SKIP_UPDATE_CHECK: "1"
@@ -1072,7 +1083,7 @@ jobs:
           fi
 
       - name: Summarize release
-        if: inputs.upload && success()
+        if: inputs.upload && success() && !inputs.package_only
         run: |
           {
             echo
@@ -1090,6 +1101,15 @@ jobs:
       # ---------- diagnostics ----------
       # Compiler/test errors become check-run annotations, which are readable
       # through the public API — so failures can be diagnosed without log access.
+      - name: Keep the IPA
+        if: inputs.upload && inputs.package_only
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.app_name }}-ipa-${{ steps.ver.outputs.build }}
+          path: ${{ runner.temp }}/export/*.ipa
+          retention-days: 5
+          if-no-files-found: error
+
       - name: Surface build errors
         if: failure()
         run: |
