@@ -82,6 +82,11 @@ jobs:
       # not our reasoning about it.
       export_by_hand: false
       asc_app_id: "6796454127"
+      # An IPA carrying a watch app holds two platforms, and fastlane's uploader
+      # cannot state which — it passes app_platform:"ios" and altool still
+      # answers "Cannot determine the platform". Ambiguity, not absence.
+      # `altool --upload-app -t ios` says it outright.
+      upload_with_altool: true
       # Inert while export_by_hand is false — the fetch and re-sign steps are
       # gated on it. Kept because it is correct, and cost a session to get right.
       resign_bundle_ids: "io.nurturelabs.nav io.nurturelabs.nav.watchkitapp"
