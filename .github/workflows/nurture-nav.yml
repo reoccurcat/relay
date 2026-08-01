@@ -93,6 +93,12 @@ jobs:
       # answers "Cannot determine the platform". Ambiguity, not absence.
       # `altool --upload-app -t ios` says it outright.
       upload_with_altool: true
+      # Watch/ without the stub — the one arrangement never tried. PlugIns/ with
+      # no stub is refused at upload; Watch/ with the stub is accepted and then
+      # refused asynchronously with ITMS-90486. Dropping the stub was ruled out
+      # by a search about apps with a watch *extension*, which this is not, and
+      # Xcode's own export of this archive writes no stub at all.
+      skip_watchkit_stub: true
       # Inert while export_by_hand is false — the fetch and re-sign steps are
       # gated on it. Kept because it is correct, and cost a session to get right.
       resign_bundle_ids: "io.nurturelabs.nav io.nurturelabs.nav.watchkitapp"
