@@ -48,4 +48,14 @@ jobs:
       # DerivedData cache, since both now build Release-iphoneos.
       run_tests: false
       package_path: ios
+      # Package the IPA by hand and re-sign it for distribution.
+      #
+      # This exists for the watch app — IDEDistribution cannot export an archive
+      # containing one under Xcode 26 — but it is switched on here for the phone
+      # app alone first, deliberately. Signing mistakes only surface at upload,
+      # which is the slowest loop in this project, so the re-signing is proven
+      # with one variable before the watch target adds a second.
+      export_by_hand: true
+      asc_app_id: "6796454127"
+      resign_bundle_ids: "io.nurturelabs.nav"
     secrets: inherit
