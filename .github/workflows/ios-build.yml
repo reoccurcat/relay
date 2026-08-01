@@ -695,22 +695,16 @@ jobs:
           # app as loose files rather than as nested code, with no cdhash. Whether
           # Xcode's own signature records it as nested says whether that is a
           # fault in how this re-signs, or simply not how nesting works.
+          # plutil rather than a heredoc: the script would have to sit at this
+          # block's indentation to keep the YAML valid, and Python will not take
+          # uniformly indented source.
           seal_summary() {
-            local WHOSE="$1" BUNDLE="$2"
-            local CR="$BUNDLE/_CodeSignature/CodeResources"
+            WHOSE="$1"
+            CR="$2/_CodeSignature/CodeResources"
             if [ ! -f "$CR" ]; then echo "  $WHOSE: no CodeResources"; return; fi
-            python3 - "$WHOSE" "$CR" <<'PYEOF'
-import plistlib, sys
-whose, path = sys.argv[1], sys.argv[2]
-d = plistlib.load(open(path, 'rb'))
-nested_rules = {k: v for k, v in d.get('rules2', {}).items()
-                if isinstance(v, dict) and v.get('nested')}
-sealed = {k: v for k, v in d.get('files2', {}).items()
-          if isinstance(v, dict) and 'cdhash' in v}
-print(f"  {whose}: {len(nested_rules)} nested rule(s), {len(sealed)} bundle(s) sealed by cdhash")
-for k in sorted(nested_rules): print(f"      rule  {k}")
-for k in sorted(sealed): print(f"      code  {k}")
-PYEOF
+            NESTED=$(plutil -p "$CR" | grep -c '"nested"' || true)
+            SEALED=$(plutil -p "$CR" | grep -c '"cdhash"' || true)
+            echo "  $WHOSE: $NESTED nested rule(s), $SEALED bundle(s) sealed by cdhash"
           }
           echo "--- code seal, before and after re-signing ---"
           seal_summary "xcode (archive)" "$APP"
