@@ -50,12 +50,16 @@ jobs:
       package_path: ios
       # Package the IPA by hand and re-sign it for distribution.
       #
-      # This exists for the watch app — IDEDistribution cannot export an archive
-      # containing one under Xcode 26 — but it is switched on here for the phone
-      # app alone first, deliberately. Signing mistakes only surface at upload,
-      # which is the slowest loop in this project, so the re-signing is proven
-      # with one variable before the watch target adds a second.
+      # This exists for the watch app: IDEDistribution cannot export an archive
+      # containing one under Xcode 26, reporting the set of valid distribution
+      # methods as empty on 26.0 and 26.1.1 alike. Packaging from the archive
+      # skips it entirely.
+      #
+      # Proven on the phone app alone first, in 0.3.26 build 105 — "UPLOAD
+      # SUCCEEDED with no errors" against an IPA signed "Apple Distribution"
+      # where the archive itself is signed "Apple Development". The watch app is
+      # the second bundle id here and nothing else changed.
       export_by_hand: true
       asc_app_id: "6796454127"
-      resign_bundle_ids: "io.nurturelabs.nav"
+      resign_bundle_ids: "io.nurturelabs.nav io.nurturelabs.nav.watchkitapp"
     secrets: inherit
