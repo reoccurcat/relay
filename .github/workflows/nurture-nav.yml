@@ -20,6 +20,11 @@ on:
         type: boolean
         required: false
         default: false
+      package_only:
+        description: "Build and package the IPA but do not send it to Apple"
+        type: boolean
+        required: false
+        default: false
   repository_dispatch:
     types: [nurture-nav-push, nurture-nav-release]
 
@@ -74,4 +79,10 @@ jobs:
       # Icons" and "A value for the Info.plist key 'CFBundleIconName' is
       # missing". The icon is not optional, so neither is this.
       download_platforms: watchOS
+      # Manual runs only — a dispatch cannot set this on a tag build, so
+      # releases are unaffected. Ticking it stops after packaging and attaches
+      # the IPA, which is the fast way to work on bundle layout: no upload, no
+      # processing wait, no rejection email, and the whole archive to inspect
+      # rather than whichever fault Apple mentioned first.
+      package_only: ${{ github.event.inputs.package_only == 'true' }}
     secrets: inherit
