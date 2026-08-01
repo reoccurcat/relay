@@ -48,10 +48,4 @@ jobs:
       # DerivedData cache, since both now build Release-iphoneos.
       run_tests: false
       package_path: ios
-      # And xcodebuild cannot export an archive that contains a watch app under
-      # Xcode 26 — IDEDistribution reports no valid distribution methods at all.
-      # The archive itself is fine and already signed, so it is packaged by hand.
-      export_by_hand: true
-      # Stated because --upload-package infers nothing, which is the point of it.
-      asc_app_id: "6796454127"
     secrets: inherit

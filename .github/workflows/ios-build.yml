@@ -573,16 +573,13 @@ jobs:
           fi
           rm -f "$RUNNER_TEMP/signing-cert.pem"
 
-      # Archives with a distribution identity when the IPA will be packaged by
-      # hand.
-      #
-      # Automatic signing archives with a development profile and lets
-      # -exportArchive re-sign for distribution afterwards. Skip the export and
-      # nothing re-signs, so App Store Connect refuses the upload: "Invalid
-      # Provisioning Profile ... [Missing code-signing certificate]. A
-      # distribution provisioning profile should be used." Asking for the
-      # distribution identity up front makes the archive already be what gets
-      # uploaded — which is the whole premise of packaging it by hand.
+      # Note for anyone reviving export_by_hand: automatic signing archives for
+      # development and relies on -exportArchive to re-sign for distribution, so
+      # a hand-packaged IPA is refused by App Store Connect for carrying a
+      # development profile. Forcing CODE_SIGN_IDENTITY does not work either —
+      # xcodebuild rejects a manual identity alongside automatic style. The path
+      # forward is manual signing with App Store profiles fetched for both the
+      # app and the watch app, which is a bigger piece of work than it looks.
       - name: Archive
         if: inputs.upload
         working-directory: src
@@ -602,7 +599,6 @@ jobs:
             -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}" \
             CODE_SIGN_STYLE=Automatic \
             DEVELOPMENT_TEAM="${{ secrets.TEAM_ID }}" \
-            ${{ inputs.export_by_hand && 'CODE_SIGN_IDENTITY="Apple Distribution"' || '' }} \
             ${{ steps.stamp.outputs.args }} \
             | tee -a "$RUNNER_TEMP/build.log"
 
