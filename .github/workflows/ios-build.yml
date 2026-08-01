@@ -687,6 +687,34 @@ jobs:
           mkdir -p "$RUNNER_TEMP/export/Payload"
           # -R follows the bundle; symlinks inside frameworks are preserved by
           # zip -y below.
+          # How Xcode sealed this same bundle, before anything here touches it.
+          #
+          # The comparison is the point. App Store Connect rejected 0.3.30 with
+          # ITMS-90486 "the expected app is missing from .../Watch" while the IPA
+          # plainly had it there — because the re-signing below sealed the watch
+          # app as loose files rather than as nested code, with no cdhash. Whether
+          # Xcode's own signature records it as nested says whether that is a
+          # fault in how this re-signs, or simply not how nesting works.
+          seal_summary() {
+            local WHOSE="$1" BUNDLE="$2"
+            local CR="$BUNDLE/_CodeSignature/CodeResources"
+            if [ ! -f "$CR" ]; then echo "  $WHOSE: no CodeResources"; return; fi
+            python3 - "$WHOSE" "$CR" <<'PYEOF'
+import plistlib, sys
+whose, path = sys.argv[1], sys.argv[2]
+d = plistlib.load(open(path, 'rb'))
+nested_rules = {k: v for k, v in d.get('rules2', {}).items()
+                if isinstance(v, dict) and v.get('nested')}
+sealed = {k: v for k, v in d.get('files2', {}).items()
+          if isinstance(v, dict) and 'cdhash' in v}
+print(f"  {whose}: {len(nested_rules)} nested rule(s), {len(sealed)} bundle(s) sealed by cdhash")
+for k in sorted(nested_rules): print(f"      rule  {k}")
+for k in sorted(sealed): print(f"      code  {k}")
+PYEOF
+          }
+          echo "--- code seal, before and after re-signing ---"
+          seal_summary "xcode (archive)" "$APP"
+
           cp -R "$APP" "$RUNNER_TEMP/export/Payload/"
           PAYLOAD_APP="$RUNNER_TEMP/export/Payload/${{ inputs.app_name }}.app"
 
@@ -762,6 +790,7 @@ jobs:
 
             echo "--- what the app is now signed with"
             codesign -dvvv "$PAYLOAD_APP" 2>&1 | grep -E 'Authority|TeamIdentifier|Identifier=' | sed 's/^/  /'
+            seal_summary "ours (re-signed)" "$PAYLOAD_APP"
           fi
 
           ( cd "$RUNNER_TEMP/export" && zip -qry "${{ inputs.app_name }}.ipa" Payload )
