@@ -48,14 +48,4 @@ jobs:
       # DerivedData cache, since both now build Release-iphoneos.
       run_tests: false
       package_path: ios
-      # The watch app's icons need a watchOS simulator runtime that the image
-      # does not ship, because actool consults one even when compiling for a
-      # device. Costs a few GB per run and only this app pays it.
-      #
-      # Pinning Xcode 26.1.1 instead was tried and is worse: it compiles the
-      # icons and then cannot export at all, reporting no valid distribution
-      # methods, because that Xcode's components have never been registered on
-      # this image. 26.0's export path is the one already proven by every
-      # release to date.
-      download_platforms: watchOS
     secrets: inherit
