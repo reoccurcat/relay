@@ -945,12 +945,21 @@ jobs:
           # arrive as strings and Ruby treats "false" as truthy. That is exactly
           # how distribute_external:false kept triggering external beta review
           # (and its Beta App Description requirement) on every release.
+          # A build App Store Connect *rejects* never finishes processing, so this
+          # wait is the difference between a run that reports and a run that sits
+          # there. altool succeeding only means Apple accepted the upload;
+          # validation happens afterwards and is announced by email, not to CI.
+          #
+          # Five minutes is well past a normal processing time and short enough
+          # that a rejection is obvious while you are still watching. The message
+          # below matters as much as the number — a bare timeout here reads like a
+          # flake, and it usually is not.
           ARGS=(
             ipa:"$IPA"
             api_key_path:"$RUNNER_TEMP/asc_key.json"
             distribute_only:true
             build_number:"${{ steps.ver.outputs.build }}"
-            wait_processing_timeout_duration:600
+            wait_processing_timeout_duration:240
           )
 
           if [ -n "$GROUPS" ]; then
@@ -976,9 +985,14 @@ jobs:
           # even when fastlane set the description moments earlier. That
           # rejection is noise here - internal testers get builds without it -
           # and it must not be allowed to mask a distribution that worked.
+          # Two attempts, not three. Each one waits out the full processing
+          # timeout, so against a build App Store Connect has rejected — which
+          # never finishes processing — every extra attempt is another four
+          # minutes of a run that cannot succeed. One retry still covers the
+          # genuine flake this loop was written for.
           distributed=
-          for attempt in 1 2 3; do
-            echo "distribution attempt $attempt of 3"
+          for attempt in 1 2; do
+            echo "distribution attempt $attempt of 2"
             set +e
             fastlane run upload_to_testflight "${ARGS[@]}" 2>&1 | tee "$RUNNER_TEMP/distribute.log"
             set -e
@@ -990,7 +1004,7 @@ jobs:
           done
 
           if [ -z "$distributed" ]; then
-            echo "::error::The build uploaded but was never distributed, so it will not appear in TestFlight for anyone. App Store Connect was still processing after three attempts. The binary is fine - add it to your tester group by hand, or re-run this job once processing finishes."
+            echo "::error::The build uploaded but was never distributed, so it will not appear in TestFlight for anyone. Either App Store Connect is still processing, or it REJECTED the build - a rejected build never finishes processing, and Apple reports that by email rather than to CI, so check the mailbox for an ITMS- code before assuming this was slowness. If processing simply ran long, the binary is fine: add it to the tester group by hand or re-run this job."
             exit 1
           fi
           echo "distributed"
