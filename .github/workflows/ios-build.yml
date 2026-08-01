@@ -88,6 +88,19 @@ on:
         required: false
         type: boolean
         default: false
+      # Leave a watch app in PlugIns/ instead of moving it to Watch/.
+      #
+      # Xcode 26 embeds watch apps in PlugIns/ — documented, and moving the embed
+      # phase back to Watch/ fails the build outright. The store has said both
+      # things: it rejected PlugIns/ with "It should be under Watch", then
+      # rejected Watch/ with "the expected app is missing from ... Watch". Those
+      # cannot both be about location, so this switch exists to settle which
+      # rejection was really about layout and which was collateral from the
+      # missing icons and the arm64e stub that build also carried.
+      keep_watch_in_plugins:
+        required: false
+        type: boolean
+        default: false
       runner:
         required: false
         type: string
@@ -728,7 +741,9 @@ jobs:
           # A `.app` inside PlugIns is always wrong for the store, whatever app is
           # being built, so this needs no per-app switch. Extensions are `.appex`
           # and stay exactly where they are.
-          if [ -d "$PAYLOAD_APP/PlugIns" ]; then
+          if [ "${{ inputs.keep_watch_in_plugins }}" = "true" ]; then
+            echo "leaving any watch app in PlugIns/, as Xcode 26 built it"
+          elif [ -d "$PAYLOAD_APP/PlugIns" ]; then
             for WATCHAPP in "$PAYLOAD_APP/PlugIns"/*.app; do
               [ -d "$WATCHAPP" ] || continue
               mkdir -p "$PAYLOAD_APP/Watch"
