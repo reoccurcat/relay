@@ -928,17 +928,9 @@ jobs:
           test -n "$IPA" || { echo "::error::no .ipa produced"; exit 1; }
           echo "$IPA" > "$RUNNER_TEMP/ipa_path"
 
-          # --upload-package, not --upload-app.
-          #
-          # --upload-app asks altool to work out what it is looking at, and on
-          # Xcode 26 it cannot: it reports "Cannot determine the platform" and
-          # then ignores --platform when told. That is a regression, not a
-          # missing flag — the same altool uploads an exported IPA of the same
-          # app happily, so what it cannot do is infer from a package it did not
-          # build.
-          #
-          # --upload-package infers nothing. Every identifier is stated, read
-          # from the app that is actually in the archive.
+          # Identifiers for --upload-package, read from the app that is
+          # actually in the archive rather than assumed. See the upload below for
+          # why both altool modes are tried.
           APP="$RUNNER_TEMP/${{ inputs.app_name }}.xcarchive/Products/Applications/${{ inputs.app_name }}.app"
           BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist")
           BUNDLE_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP/Info.plist")
@@ -951,19 +943,46 @@ jobs:
           # altool's exit code cannot be trusted here: it has printed an error
           # and exited 0. The output is checked as well as the status.
           set -o pipefail
-          xcrun altool --upload-package "$IPA" \
-            --type ios \
-            --apple-id "${{ inputs.asc_app_id }}" \
-            --bundle-id "$BUNDLE_ID" \
-            --bundle-version "$BUNDLE_VERSION" \
-            --bundle-short-version-string "$SHORT_VERSION" \
-            --apiKey "${{ secrets.ASC_KEY_ID }}" \
-            --apiIssuer "${{ secrets.ASC_ISSUER_ID }}" 2>&1 | tee "$RUNNER_TEMP/altool.log"
 
-          if grep -q 'ERROR' "$RUNNER_TEMP/altool.log"; then
+          # --upload-app first, --upload-package as the fallback.
+          #
+          # The difference is what reaches App Store Connect *besides* the bytes.
+          # --upload-app reads the package and describes what it finds, including
+          # a watch app. --upload-package infers nothing and is told only the
+          # iOS-level identifiers, so nothing in that delivery mentions a watch
+          # app at all — a candidate for the asynchronous "the expected app is
+          # missing from .../Watch" that follows an otherwise accepted upload.
+          #
+          # --upload-app was abandoned earlier for "Cannot determine the
+          # platform", but that was against a package that was also
+          # development-signed and carried an arm64e stub. Worth asking again now
+          # the package is well formed; if it still cannot classify it, the
+          # fallback runs and nothing is lost but a minute.
+          UPLOADED=""
+          echo "--- trying --upload-app (derives the delivery from the package)"
+          xcrun altool --upload-app -f "$IPA" -t ios \
+            --apiKey "${{ secrets.ASC_KEY_ID }}" \
+            --apiIssuer "${{ secrets.ASC_ISSUER_ID }}" 2>&1 | tee "$RUNNER_TEMP/altool.log" || true
+          if ! grep -q 'ERROR' "$RUNNER_TEMP/altool.log"; then
+            UPLOADED="--upload-app"
+          else
+            echo "--- --upload-app did not take it; falling back to --upload-package"
+            xcrun altool --upload-package "$IPA" \
+              --type ios \
+              --apple-id "${{ inputs.asc_app_id }}" \
+              --bundle-id "$BUNDLE_ID" \
+              --bundle-version "$BUNDLE_VERSION" \
+              --bundle-short-version-string "$SHORT_VERSION" \
+              --apiKey "${{ secrets.ASC_KEY_ID }}" \
+              --apiIssuer "${{ secrets.ASC_ISSUER_ID }}" 2>&1 | tee "$RUNNER_TEMP/altool.log"
+            grep -q 'ERROR' "$RUNNER_TEMP/altool.log" || UPLOADED="--upload-package"
+          fi
+
+          if [ -z "$UPLOADED" ]; then
             echo "::error::altool reported an error — see above"
             exit 1
           fi
+          echo "uploaded via $UPLOADED"
 
       - name: Upload to TestFlight
         if: inputs.upload && !inputs.export_by_hand && !inputs.package_only
