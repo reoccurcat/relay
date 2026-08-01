@@ -795,10 +795,13 @@ jobs:
           # looked like, when the answer was one `unzip -l` away. ITMS rejections
           # name a path — being able to compare that path against the real archive
           # turns a guess into a check.
-          echo "--- IPA layout as uploaded ---"
-          unzip -l "$RUNNER_TEMP/export/${{ inputs.app_name }}.ipa" \
-            | awk '{ print $NF }' | grep -E '\.app/$|^Payload/|WatchKitSupport2' \
-            | grep -vE '\.app/.+/' | sort -u | head -40
+          IPA_LIST="$RUNNER_TEMP/ipa-listing.txt"
+          unzip -l "$RUNNER_TEMP/export/${{ inputs.app_name }}.ipa" | awk '{ print $NF }' > "$IPA_LIST"
+          echo "--- IPA: every entry mentioning Watch ---"
+          grep -i watch "$IPA_LIST" | head -25 || echo "  NONE — the watch app is not in the archive"
+          echo "--- IPA: top level inside the app bundle ---"
+          grep -E "^Payload/[^/]+\.app/[^/]+/?$" "$IPA_LIST" | sort -u | head -30
+          echo "--- IPA: $(grep -c . "$IPA_LIST") entries total ---"
           WATCH_BUNDLE=$(find "$RUNNER_TEMP/export/Payload" -maxdepth 3 -name '*.app' \
             -not -path "$PAYLOAD_APP" | head -1)
           if [ -n "$WATCH_BUNDLE" ]; then
