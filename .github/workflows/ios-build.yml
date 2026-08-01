@@ -59,6 +59,24 @@ on:
         required: false
         type: string
         default: ""
+      # Space-separated bundle identifiers to fetch App Store profiles for and
+      # re-sign the hand-packaged IPA with. Only used alongside export_by_hand.
+      #
+      # Needed because the archive is signed for *development*: measured, not
+      # assumed — a build log shows "Apple Development: … / iOS Team Provisioning
+      # Profile" against both the app and its watch app. Normally -exportArchive
+      # re-signs that for distribution on the way out, so an IPA packaged by hand
+      # skips the only step that made it shippable and App Store Connect refuses
+      # it with "Invalid Provisioning Profile … [Missing code-signing
+      # certificate]".
+      #
+      # Order does not matter; each nested bundle is matched by its own
+      # CFBundleIdentifier. Empty means package as-is, which is only correct for
+      # an app that was already archived for distribution.
+      resign_bundle_ids:
+        required: false
+        type: string
+        default: ""
       runner:
         required: false
         type: string
@@ -621,8 +639,33 @@ jobs:
       # whatever the archive is signed with is what ships, and a malformed bundle
       # is App Store Connect's problem rather than xcodebuild's. Off by default;
       # only an app that cannot export any other way should take that trade.
+      # Fetches an App Store profile per bundle identifier, creating it if the
+      # team does not have one yet. The App IDs themselves must already exist —
+      # -allowProvisioningUpdates and this both mint profiles freely and neither
+      # can invent an App ID.
+      - name: Fetch App Store provisioning profiles
+        if: inputs.upload && inputs.export_by_hand && inputs.resign_bundle_ids != ''
+        env:
+          RESIGN_BUNDLE_IDS: ${{ inputs.resign_bundle_ids }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/profiles"
+          for BID in $RESIGN_BUNDLE_IDS; do
+            echo "--- App Store profile for $BID"
+            fastlane sigh \
+              --api_key_path "$RUNNER_TEMP/asc_key.json" \
+              --app_identifier "$BID" \
+              --team_id "$TEAM_ID" \
+              --output_path "$RUNNER_TEMP/profiles" \
+              --filename "$BID.mobileprovision"
+          done
+          ls -la "$RUNNER_TEMP/profiles"
+
       - name: Package IPA from the archive
         if: inputs.upload && inputs.export_by_hand
+        env:
+          RESIGN_BUNDLE_IDS: ${{ inputs.resign_bundle_ids }}
         run: |
           set -euo pipefail
           ARCHIVE="$RUNNER_TEMP/${{ inputs.app_name }}.xcarchive"
@@ -634,6 +677,56 @@ jobs:
           # -R follows the bundle; symlinks inside frameworks are preserved by
           # zip -y below.
           cp -R "$APP" "$RUNNER_TEMP/export/Payload/"
+          PAYLOAD_APP="$RUNNER_TEMP/export/Payload/${{ inputs.app_name }}.app"
+
+          # Re-sign for distribution, on the copy rather than the archive, so the
+          # archive stays exactly what xcodebuild produced and remains uploadable
+          # by the ordinary export path if this one is ever turned off.
+          if [ -n "${RESIGN_BUNDLE_IDS:-}" ]; then
+            IDENTITY="Apple Distribution"
+            security find-identity -v -p codesigning | sed 's/^/  /'
+
+            sign_one() {
+              BUNDLE="$1"
+              BID=""
+              if [ -f "$BUNDLE/Info.plist" ]; then
+                BID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$BUNDLE/Info.plist" 2>/dev/null || true)
+              fi
+              PROFILE="$RUNNER_TEMP/profiles/$BID.mobileprovision"
+              if [ -n "$BID" ] && [ -f "$PROFILE" ]; then
+                cp "$PROFILE" "$BUNDLE/embedded.mobileprovision"
+                # Entitlements are granted by the profile, so they have to come
+                # out of the profile that is about to be embedded rather than
+                # from whatever the development signing baked in.
+                security cms -D -i "$PROFILE" > "$RUNNER_TEMP/prof.plist"
+                /usr/libexec/PlistBuddy -x -c 'Print :Entitlements' \
+                  "$RUNNER_TEMP/prof.plist" > "$RUNNER_TEMP/ent.plist"
+                echo "  signing $BID  <- $(basename "$PROFILE")"
+                codesign --force --sign "$IDENTITY" \
+                  --entitlements "$RUNNER_TEMP/ent.plist" \
+                  --generate-entitlement-der "$BUNDLE"
+              else
+                # Frameworks and dylibs carry no profile of their own and must
+                # still be re-signed, or the outer signature covers a bundle
+                # signed by a different identity and the whole thing is invalid.
+                echo "  signing $(basename "$BUNDLE")  (no profile)"
+                codesign --force --sign "$IDENTITY" "$BUNDLE"
+              fi
+            }
+
+            # Deepest first: signing an outer bundle seals whatever is inside it,
+            # so anything re-signed afterwards invalidates the seal above it.
+            find "$PAYLOAD_APP" \
+                 \( -name '*.app' -o -name '*.appex' -o -name '*.framework' -o -name '*.dylib' \) \
+                 -not -path "$PAYLOAD_APP" \
+              | awk -F/ '{ print NF, $0 }' | sort -rn | cut -d' ' -f2- \
+              | while IFS= read -r NESTED; do sign_one "$NESTED"; done
+            sign_one "$PAYLOAD_APP"
+
+            echo "--- what the app is now signed with"
+            codesign -dvvv "$PAYLOAD_APP" 2>&1 | grep -E 'Authority|TeamIdentifier|Identifier=' | sed 's/^/  /'
+          fi
+
           ( cd "$RUNNER_TEMP/export" && zip -qry "${{ inputs.app_name }}.ipa" Payload )
           # An app containing a watch app also needs a WatchKit stub beside
           # Payload, which -exportArchive injects from the SDK and a plain zip of
