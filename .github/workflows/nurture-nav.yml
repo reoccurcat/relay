@@ -52,4 +52,6 @@ jobs:
       # Xcode 26 — IDEDistribution reports no valid distribution methods at all.
       # The archive itself is fine and already signed, so it is packaged by hand.
       export_by_hand: true
+      # Stated because --upload-package infers nothing, which is the point of it.
+      asc_app_id: "6796454127"
     secrets: inherit
