@@ -113,6 +113,19 @@ on:
         required: false
         type: boolean
         default: false
+      # Omit WatchKitSupport2/ from a hand-packaged IPA.
+      #
+      # The stub was added for ITMS-90398, and a search said dropping it earns
+      # ITMS-90484 instead — but that search is about apps with a watch
+      # *extension*. Xcode's own app-store-connect export of this very archive
+      # writes no WatchKitSupport2 at all, which is the stronger evidence for a
+      # single-target WKApplication. A legacy WatchKit 2 marker on a modern watch
+      # app is a plausible reason the asynchronous validator goes looking for
+      # something that is not there.
+      skip_watchkit_stub:
+        required: false
+        type: boolean
+        default: false
       # Ask the only question underneath all of the hand packaging: can
       # xcodebuild's own exporter handle this archive under *any* Xcode on the
       # image? See the probe step for why that is suddenly worth re-asking.
@@ -915,7 +928,9 @@ jobs:
           # Payload, which -exportArchive injects from the SDK and a plain zip of
           # the archive would leave out. App Store Connect rejects the upload
           # without it (ITMS-90398, "Invalid WatchKit support").
-          if find "$APP" -maxdepth 3 -name '*.app' -not -path "$APP" | grep -q .; then
+          if [ "${{ inputs.skip_watchkit_stub }}" = "true" ]; then
+            echo "no WatchKitSupport2/, as xcodebuild's own export writes none"
+          elif find "$APP" -maxdepth 3 -name '*.app' -not -path "$APP" | grep -q .; then
             WK="$(xcode-select -p)/Platforms/WatchOS.platform/Developer/SDKs/WatchOS.sdk/Library/Application Support/WatchKit/WK"
             if [ -f "$WK" ]; then
               mkdir -p "$RUNNER_TEMP/export/WatchKitSupport2"
