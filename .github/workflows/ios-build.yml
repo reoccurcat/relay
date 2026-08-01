@@ -31,6 +31,21 @@ on:
         required: false
         type: string
         default: "26.0"
+      # Space-separated platforms to fetch before building, e.g. "watchOS".
+      #
+      # The runner image ships Xcode with every platform SDK but not every
+      # simulator *runtime*, and actool consults the runtime even when compiling
+      # an asset catalog for a device — so a watchOS app's icons fail to compile
+      # with "No simulator runtime version ... available to use with
+      # watchsimulator SDK", and the build fails with the catalog present while
+      # export fails on a missing icon without it.
+      #
+      # Empty by default because the download is several GB: only an app that
+      # actually embeds another platform should pay for it.
+      download_platforms:
+        required: false
+        type: string
+        default: ""
       runner:
         required: false
         type: string
@@ -109,6 +124,22 @@ jobs:
           ls /Applications | grep -i '^Xcode'
           sudo xcode-select -s "/Applications/Xcode_${{ inputs.xcode_version }}.app/Contents/Developer"
           xcodebuild -version
+
+      # Only for apps that embed another platform — see download_platforms.
+      #
+      # Deliberately not solved by selecting a newer Xcode that happens to match
+      # an installed runtime: 26.1.1 compiles the icons and then cannot export at
+      # all, because its distribution components have never been registered on
+      # this image and xcodebuild reports the set of valid export methods as
+      # empty. Staying on the Xcode whose export path is known to work and
+      # fetching what it lacks is the trade with fewer unknowns.
+      - name: Download extra platforms
+        if: inputs.download_platforms != ''
+        run: |
+          for platform in ${{ inputs.download_platforms }}; do
+            echo "downloading $platform"
+            sudo xcodebuild -downloadPlatform "$platform"
+          done
 
       # Booting a simulator is the single most expensive thing in a test run —
       # measured at 150-346s, dwarfing the ~20-60s compile. It does not depend on
