@@ -763,6 +763,23 @@ jobs:
             if [ -f "$WK" ]; then
               mkdir -p "$RUNNER_TEMP/export/WatchKitSupport2"
               cp "$WK" "$RUNNER_TEMP/export/WatchKitSupport2/WK"
+              STUB="$RUNNER_TEMP/export/WatchKitSupport2/WK"
+
+              # The SDK's copy of the stub carries an arm64e slice, and App Store
+              # Connect refuses a submission containing one:
+              #
+              #   ITMS-90398: Invalid WatchKit support — The bundle contains
+              #   architectures that aren't allowed …
+              #
+              # -exportArchive strips it on the way out, silently, so this is one
+              # more thing the exporter was doing for us that hand-packaging has
+              # to do for itself. Costs nothing when the slice is absent.
+              echo "WK stub as shipped by the SDK: $(lipo -info "$STUB" 2>/dev/null || file -b "$STUB")"
+              if lipo -info "$STUB" 2>/dev/null | grep -q arm64e; then
+                lipo -remove arm64e "$STUB" -output "$STUB.thin" && mv "$STUB.thin" "$STUB"
+                echo "removed arm64e: $(lipo -info "$STUB")"
+              fi
+
               ( cd "$RUNNER_TEMP/export" && zip -qry "${{ inputs.app_name }}.ipa" WatchKitSupport2 )
               rm -rf "$RUNNER_TEMP/export/WatchKitSupport2"
               echo "added WatchKitSupport2/WK"
