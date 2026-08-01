@@ -101,6 +101,18 @@ on:
         required: false
         type: boolean
         default: false
+      # Upload with altool rather than fastlane's pilot, independently of how the
+      # IPA was packaged.
+      #
+      # Needed by any app embedding a watch app. fastlane is passed
+      # app_platform:"ios" and altool still answers "Cannot determine the
+      # platform", because an IPA containing a watch app genuinely holds two —
+      # this is ambiguity, not absence, which is why stating it resolves it.
+      # `--upload-app -t ios` says so directly.
+      upload_with_altool:
+        required: false
+        type: boolean
+        default: false
       # Ask the only question underneath all of the hand packaging: can
       # xcodebuild's own exporter handle this archive under *any* Xcode on the
       # image? See the probe step for why that is suddenly worth re-asking.
@@ -1018,7 +1030,7 @@ jobs:
       # The .p8 is already on disk from "Write App Store Connect credentials";
       # altool finds it by key id.
       - name: Upload to TestFlight (altool)
-        if: inputs.upload && inputs.export_by_hand && !inputs.package_only
+        if: inputs.upload && (inputs.export_by_hand || inputs.upload_with_altool) && !inputs.package_only
         run: |
           IPA=$(find "$RUNNER_TEMP/export" -maxdepth 1 -name '*.ipa' | head -1)
           test -n "$IPA" || { echo "::error::no .ipa produced"; exit 1; }
@@ -1081,7 +1093,7 @@ jobs:
           echo "uploaded via $UPLOADED"
 
       - name: Upload to TestFlight
-        if: inputs.upload && !inputs.export_by_hand && !inputs.package_only
+        if: inputs.upload && !inputs.export_by_hand && !inputs.upload_with_altool && !inputs.package_only
         env:
           FASTLANE_SKIP_UPDATE_CHECK: "1"
           FASTLANE_HIDE_CHANGELOG: "1"
