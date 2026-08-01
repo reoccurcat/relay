@@ -679,6 +679,32 @@ jobs:
           cp -R "$APP" "$RUNNER_TEMP/export/Payload/"
           PAYLOAD_APP="$RUNNER_TEMP/export/Payload/${{ inputs.app_name }}.app"
 
+          # A watch app has to sit in Watch/, and Xcode 26 builds it into
+          # PlugIns/ instead. App Store Connect is explicit about it:
+          #
+          #   Invalid directory. The bundle …/PlugIns/NurtureNavWatch.app is not
+          #   contained in a correctly named directory. It should be under Watch.
+          #
+          # Moving the embed build phase back to Watch/ fails the *build* with a
+          # bare exit 70, so the two ends disagree and only one of them can be
+          # argued with. Since this path packages the IPA itself, it can simply
+          # put the bundle where the store wants it — and because the move
+          # happens before re-signing below, the signatures cover the layout that
+          # actually ships.
+          #
+          # A `.app` inside PlugIns is always wrong for the store, whatever app is
+          # being built, so this needs no per-app switch. Extensions are `.appex`
+          # and stay exactly where they are.
+          if [ -d "$PAYLOAD_APP/PlugIns" ]; then
+            for WATCHAPP in "$PAYLOAD_APP/PlugIns"/*.app; do
+              [ -d "$WATCHAPP" ] || continue
+              mkdir -p "$PAYLOAD_APP/Watch"
+              mv "$WATCHAPP" "$PAYLOAD_APP/Watch/"
+              echo "moved $(basename "$WATCHAPP") from PlugIns/ to Watch/"
+            done
+            rmdir "$PAYLOAD_APP/PlugIns" 2>/dev/null && echo "removed empty PlugIns/" || true
+          fi
+
           # Re-sign for distribution, on the copy rather than the archive, so the
           # archive stays exactly what xcodebuild produced and remains uploadable
           # by the ordinary export path if this one is ever turned off.
