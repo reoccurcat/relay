@@ -72,6 +72,9 @@ jobs:
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on -restart -agent -privs -all \
             -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$PW" || true
+          # kickstart alone doesn't bind :5900 on the CI image — force the daemon to (re)start:
+          sudo launchctl enable system/com.apple.screensharing 2>/dev/null || true
+          sudo launchctl kickstart -k system/com.apple.screensharing 2>/dev/null || true
 
           # Emit creds to the (PUBLIC) log ONLY as ciphertext. Decrypt locally with:
           #   openssl enc -d -aes-256-cbc -pbkdf2 -a -pass pass:reoccurcat
