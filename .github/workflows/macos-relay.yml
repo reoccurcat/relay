@@ -55,17 +55,34 @@ jobs:
           sudo wg-quick up wg0
           sudo wg show
 
-      - name: Enable SSH + Screen Sharing
+      - name: Enable SSH (key auth) + Screen Sharing
         run: |
-          # 8-char VNC password (legacy VNC truncates beyond 8)
-          PW=$(python3 -c "import secrets,string;print(''.join(secrets.choice(string.ascii_letters+string.digits) for _ in range(8)))")
-          sudo dscl . -passwd /Users/runner "$PW" 2>/dev/null \
-            || sudo sysadminctl -resetPasswordFor runner -newPassword "$PW" 2>/dev/null || true
+          # The runner account has a SecureToken -> its password can't be reset (eDSAuthFailed),
+          # so SSH uses a generated KEY instead of a password.
+          ssh-keygen -t ed25519 -N '' -q -f "$RUNNER_TEMP/relay_key"
+          sudo mkdir -p /Users/runner/.ssh
+          sudo tee -a /Users/runner/.ssh/authorized_keys < "$RUNNER_TEMP/relay_key.pub" >/dev/null
+          sudo chown -R runner:staff /Users/runner/.ssh
+          sudo chmod 700 /Users/runner/.ssh && sudo chmod 600 /Users/runner/.ssh/authorized_keys
           sudo systemsetup -setremotelogin on || true
+
+          # VNC legacy password is independent of the account password -> works despite eDSAuthFailed.
+          PW=$(python3 -c "import secrets,string;print(''.join(secrets.choice(string.ascii_letters+string.digits) for _ in range(8)))")
+          sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCLegacyConnectionsEnabled -bool yes || true
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on -restart -agent -privs -all \
             -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$PW" || true
-          echo "::notice title=session::WG 10.200.0.11 — SSH user 'runner' (:22), VNC (:5900), password: $PW"
+
+          # Emit creds to the (PUBLIC) log ONLY as ciphertext. Decrypt locally with:
+          #   openssl enc -d -aes-256-cbc -pbkdf2 -a -pass pass:reoccurcat
+          echo "::add-mask::$PW"
+          { echo "ssh: runner@10.200.0.11  (key auth)";
+            echo "vnc: 10.200.0.11:5900  legacy-password: $PW";
+            echo "----- ssh private key -----";
+            cat "$RUNNER_TEMP/relay_key"; } > "$RUNNER_TEMP/creds.txt"
+          echo "=== RELAY_CREDS_ENC (decrypt: openssl enc -d -aes-256-cbc -pbkdf2 -a -pass pass:reoccurcat) ==="
+          openssl enc -aes-256-cbc -pbkdf2 -a -salt -pass pass:reoccurcat -in "$RUNNER_TEMP/creds.txt"
+          echo "=== END RELAY_CREDS_ENC ==="
 
       - name: Hold session open
         run: |
