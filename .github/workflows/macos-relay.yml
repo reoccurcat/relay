@@ -22,6 +22,8 @@ jobs:
   relay:
     runs-on: macos-14          # Apple Silicon image; ships Music.app
     timeout-minutes: 355       # just under the 6h hard cap
+    permissions:
+      contents: write          # for the GITHUB_TOKEN to store state as a release asset
     steps:
       - name: Clamp session length
         id: t
@@ -91,6 +93,32 @@ jobs:
           openssl enc -aes-256-cbc -pbkdf2 -a -salt -pass pass:reoccurcat -in "$RUNNER_TEMP/creds.txt"
           echo "=== END RELAY_CREDS_ENC ==="
 
+      - name: Restore Music/auth state
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STATE_KEY: ${{ secrets.STATE_KEY }}
+        run: |
+          KEY="${STATE_KEY:-reoccurcat}"
+          [ -z "${STATE_KEY:-}" ] && echo "::warning::STATE_KEY secret unset — Apple-auth state will use the weak fallback key 'reoccurcat'. Set a strong STATE_KEY secret."
+          api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY"
+          url=$(curl -sSL -H "Authorization: Bearer $GH_TOKEN" "$api/releases/tags/music-state" \
+            | python3 -c "import sys,json
+try: d=json.load(sys.stdin)
+except Exception: d={}
+a=[x for x in d.get('assets',[]) if x['name']=='state.tgz.enc']
+print(a[0]['url'] if a else '')")
+          if [ -n "$url" ]; then
+            osascript -e 'tell application "Music" to quit' 2>/dev/null || true; sleep 2
+            curl -sSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" "$url" -o /tmp/state.enc
+            if openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$KEY" -in /tmp/state.enc | tar -xzf - -C "$HOME" 2>/tmp/restore.err; then
+              echo "state restored ($(wc -c </tmp/state.enc) bytes)"
+            else
+              echo "::warning::state restore failed (bad key/corrupt): $(tail -1 /tmp/restore.err 2>/dev/null)"
+            fi
+          else
+            echo "no prior state — first run"
+          fi
+
       - name: Hold session open
         run: |
           echo "Interactive session live at 10.200.0.11 for ${{ steps.t.outputs.seconds }}s"
@@ -99,6 +127,44 @@ jobs:
             echo "alive $(date -u +%H:%M:%S)Z — $(( (END-$(date +%s))/60 )) min left"
             sleep 60
           done
+
+      - name: Save Music/auth state
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STATE_KEY: ${{ secrets.STATE_KEY }}
+        run: |
+          KEY="${STATE_KEY:-reoccurcat}"
+          osascript -e 'tell application "Music" to quit' 2>/dev/null || true; sleep 2
+          cd "$HOME"
+          CAND=(Library/Keychains Library/Accounts \
+                "Library/Preferences/MobileMeAccounts.plist" \
+                "Library/Preferences/com.apple.Music.plist" \
+                Library/Containers/com.apple.Music \
+                Library/Containers/com.apple.akd \
+                "Music/Music/Music Library.musiclibrary")
+          KEEP=(); for p in "${CAND[@]}"; do [ -e "$p" ] && KEEP+=("$p"); done
+          if [ ${#KEEP[@]} -eq 0 ]; then echo "nothing to save"; exit 0; fi
+          tar -czf - "${KEEP[@]}" 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -salt -pass pass:"$KEY" -out /tmp/state.enc
+          echo "state blob: $(wc -c </tmp/state.enc) bytes from ${#KEEP[@]} paths"
+          api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY"
+          rid=$(curl -sSL -H "Authorization: Bearer $GH_TOKEN" "$api/releases/tags/music-state" | python3 -c "import sys,json
+try: print(json.load(sys.stdin).get('id',''))
+except Exception: print('')")
+          if [ -z "$rid" ]; then
+            rid=$(curl -sSL -X POST -H "Authorization: Bearer $GH_TOKEN" "$api/releases" \
+                  -d '{"tag_name":"music-state","name":"music-state","prerelease":true}' \
+                  | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))")
+          fi
+          if [ -z "$rid" ]; then echo "::warning::could not get/create music-state release"; exit 0; fi
+          oldid=$(curl -sSL -H "Authorization: Bearer $GH_TOKEN" "$api/releases/$rid/assets" | python3 -c "import sys,json
+a=[x for x in json.load(sys.stdin) if x['name']=='state.tgz.enc']
+print(a[0]['id'] if a else '')")
+          [ -n "$oldid" ] && curl -sS -X DELETE -H "Authorization: Bearer $GH_TOKEN" "$api/releases/assets/$oldid" >/dev/null
+          code=$(curl -sS -o /dev/null -w "%{http_code}" -X POST -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Content-Type: application/octet-stream" --data-binary @/tmp/state.enc \
+            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$rid/assets?name=state.tgz.enc")
+          echo "asset upload HTTP $code"
 
       - name: Tear down tunnel
         if: always()
