@@ -1,0 +1,81 @@
+name: macos-relay
+
+# Opens a WireGuard-reachable interactive session on a GitHub-hosted macOS runner
+# for `hours` hours, so you can drive Music.app (iTunes Match custom-audio upload)
+# over the tunnel. Runner joins your WG net as 10.200.0.11.
+#
+# Secrets required (already set on reoccurcat/relay):
+#   WG_PRIVATE_KEY  - this runner/client's WireGuard private key (matches 10.200.0.11)
+#   WG_PUBLIC_KEY   - your WG SERVER's public key  (Peer.PublicKey)
+#   WG_ENDPOINT     - your WG server host:port      (Peer.Endpoint)
+#   TEAM_ID         - not used by this workflow (leave as-is)
+
+on:
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "Session length in hours (max 5.5 — GitHub caps a single job at 6h)"
+        required: true
+        default: "3"
+
+jobs:
+  relay:
+    runs-on: macos-14          # Apple Silicon image; ships Music.app
+    timeout-minutes: 355       # just under the 6h hard cap
+    steps:
+      - name: Clamp session length
+        id: t
+        run: |
+          H="${{ github.event.inputs.hours }}"
+          [[ "$H" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "hours must be numeric"; exit 1; }
+          SEC=$(python3 -c "print(min(int(float('$H')*3600), 5*3600+1800))")
+          echo "seconds=$SEC" >> "$GITHUB_OUTPUT"
+          echo "Holding session for ${SEC}s"
+
+      - name: Install WireGuard
+        run: brew install wireguard-tools wireguard-go
+
+      - name: Bring up tunnel
+        run: |
+          umask 077
+          cat > wg0.conf <<EOF
+          [Interface]
+          PrivateKey = ${{ secrets.WG_PRIVATE_KEY }}
+          Address = 10.200.0.11/32
+          DNS = 1.1.1.1
+
+          [Peer]
+          PublicKey = ${{ secrets.WG_PUBLIC_KEY }}
+          Endpoint = ${{ secrets.WG_ENDPOINT }}
+          AllowedIPs = 192.168.0.0/16,10.200.0.0/24
+          PersistentKeepalive = 25
+          EOF
+          sudo mkdir -p /etc/wireguard
+          sudo mv wg0.conf /etc/wireguard/wg0.conf
+          sudo wg-quick up wg0
+          sudo wg show
+
+      - name: Enable SSH + Screen Sharing
+        run: |
+          # 8-char VNC password (legacy VNC truncates beyond 8)
+          PW=$(python3 -c "import secrets,string;print(''.join(secrets.choice(string.ascii_letters+string.digits) for _ in range(8)))")
+          sudo dscl . -passwd /Users/runner "$PW" 2>/dev/null \
+            || sudo sysadminctl -resetPasswordFor runner -newPassword "$PW" 2>/dev/null || true
+          sudo systemsetup -setremotelogin on || true
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate -configure -access -on -restart -agent -privs -all \
+            -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$PW" || true
+          echo "::notice title=session::WG 10.200.0.11 — SSH user 'runner' (:22), VNC (:5900), password: $PW"
+
+      - name: Hold session open
+        run: |
+          echo "Interactive session live at 10.200.0.11 for ${{ steps.t.outputs.seconds }}s"
+          END=$(( $(date +%s) + ${{ steps.t.outputs.seconds }} ))
+          while [ "$(date +%s)" -lt "$END" ]; do
+            echo "alive $(date -u +%H:%M:%S)Z — $(( (END-$(date +%s))/60 )) min left"
+            sleep 60
+          done
+
+      - name: Tear down tunnel
+        if: always()
+        run: sudo wg-quick down wg0 || true
