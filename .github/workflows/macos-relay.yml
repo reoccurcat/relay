@@ -102,11 +102,7 @@ jobs:
           [ -z "${STATE_KEY:-}" ] && echo "::warning::STATE_KEY secret unset — Apple-auth state will use the weak fallback key 'reoccurcat'. Set a strong STATE_KEY secret."
           api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY"
           url=$(curl -sSL -H "Authorization: Bearer $GH_TOKEN" "$api/releases/tags/music-state" \
-            | python3 -c "import sys,json
-try: d=json.load(sys.stdin)
-except Exception: d={}
-a=[x for x in d.get('assets',[]) if x['name']=='state.tgz.enc']
-print(a[0]['url'] if a else '')")
+            | python3 -c "import sys,json;d=json.load(sys.stdin);d=d if isinstance(d,dict) else {};a=[x for x in d.get('assets',[]) if x['name']=='state.tgz.enc'];print(a[0]['url'] if a else '')")
           if [ -n "$url" ]; then
             osascript -e 'tell application "Music" to quit' 2>/dev/null || true; sleep 2
             curl -sSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" "$url" -o /tmp/state.enc
@@ -148,18 +144,14 @@ print(a[0]['url'] if a else '')")
           tar -czf - "${KEEP[@]}" 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -salt -pass pass:"$KEY" -out /tmp/state.enc
           echo "state blob: $(wc -c </tmp/state.enc) bytes from ${#KEEP[@]} paths"
           api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY"
-          rid=$(curl -sSL -H "Authorization: Bearer $GH_TOKEN" "$api/releases/tags/music-state" | python3 -c "import sys,json
-try: print(json.load(sys.stdin).get('id',''))
-except Exception: print('')")
+          rid=$(curl -sSL -H "Authorization: Bearer $GH_TOKEN" "$api/releases/tags/music-state" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('id','') if isinstance(d,dict) else '')")
           if [ -z "$rid" ]; then
             rid=$(curl -sSL -X POST -H "Authorization: Bearer $GH_TOKEN" "$api/releases" \
                   -d '{"tag_name":"music-state","name":"music-state","prerelease":true}' \
                   | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))")
           fi
           if [ -z "$rid" ]; then echo "::warning::could not get/create music-state release"; exit 0; fi
-          oldid=$(curl -sSL -H "Authorization: Bearer $GH_TOKEN" "$api/releases/$rid/assets" | python3 -c "import sys,json
-a=[x for x in json.load(sys.stdin) if x['name']=='state.tgz.enc']
-print(a[0]['id'] if a else '')")
+          oldid=$(curl -sSL -H "Authorization: Bearer $GH_TOKEN" "$api/releases/$rid/assets" | python3 -c "import sys,json;a=[x for x in json.load(sys.stdin) if x['name']=='state.tgz.enc'];print(a[0]['id'] if a else '')")
           [ -n "$oldid" ] && curl -sS -X DELETE -H "Authorization: Bearer $GH_TOKEN" "$api/releases/assets/$oldid" >/dev/null
           code=$(curl -sS -o /dev/null -w "%{http_code}" -X POST -H "Authorization: Bearer $GH_TOKEN" \
             -H "Content-Type: application/octet-stream" --data-binary @/tmp/state.enc \
