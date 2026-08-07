@@ -76,9 +76,13 @@ jobs:
           # Emit creds to the (PUBLIC) log ONLY as ciphertext. Decrypt locally with:
           #   openssl enc -d -aes-256-cbc -pbkdf2 -a -pass pass:reoccurcat
           echo "::add-mask::$PW"
-          { echo "ssh: runner@10.200.0.11  (key auth)";
-            echo "vnc: 10.200.0.11:5900  legacy-password: $PW";
-            echo "----- ssh private key -----";
+          { echo "# 1) save the key below as relay_key ; chmod 600 relay_key";
+            echo "# 2) screen-share over ssh:";
+            echo "#    ssh -i relay_key -N -L 5900:127.0.0.1:5900 runner@10.200.0.11 &";
+            echo "# 3) point any VNC client at 127.0.0.1:5900  (legacy password below)";
+            echo "# plain ssh shell:  ssh -i relay_key runner@10.200.0.11";
+            echo "vnc-legacy-password: $PW";
+            echo "----- ssh private key (relay_key) -----";
             cat "$RUNNER_TEMP/relay_key"; } > "$RUNNER_TEMP/creds.txt"
           echo "=== RELAY_CREDS_ENC (decrypt: openssl enc -d -aes-256-cbc -pbkdf2 -a -pass pass:reoccurcat) ==="
           openssl enc -aes-256-cbc -pbkdf2 -a -salt -pass pass:reoccurcat -in "$RUNNER_TEMP/creds.txt"
