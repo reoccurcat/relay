@@ -77,6 +77,10 @@ jobs:
           # kickstart alone doesn't bind :5900 on the CI image — force the daemon to (re)start:
           sudo launchctl enable system/com.apple.screensharing 2>/dev/null || true
           sudo launchctl kickstart -k system/com.apple.screensharing 2>/dev/null || true
+          # attach ARD to the pre-logged-in CONSOLE session — THIS is what avoids the black screen
+          # (share the real desktop, not a headless virtual session). Needs a user at the console.
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -restart -agent -console 2>/dev/null || true
+          echo "console user = $(stat -f%Su /dev/console)   (if 'root' at loginwindow, no desktop is logged in -> still black)"
 
           # Emit creds to the (PUBLIC) log ONLY as ciphertext. Decrypt locally with:
           #   openssl enc -d -aes-256-cbc -pbkdf2 -a -pass pass:reoccurcat
