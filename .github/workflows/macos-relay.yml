@@ -20,7 +20,7 @@ on:
 
 jobs:
   relay:
-    runs-on: macos-14          # Apple Silicon image; ships Music.app
+    runs-on: macos-13          # Intel/VMware image; app windows composite (arm64 macos-14 = VZ backing-store bug)
     timeout-minutes: 355       # just under the 6h hard cap
     permissions:
       contents: write          # for the GITHUB_TOKEN to store state as a release asset
