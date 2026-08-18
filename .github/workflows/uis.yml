@@ -1,0 +1,52 @@
+# Caller workflow for the shared iOS pipeline.
+#
+# Lives at .github/workflows/uis.yml in reoccurcat/relay. Kept in-repo so the
+# app's build contract is reviewable alongside the app. Source is on GitLab, so
+# there is no push trigger — GitLab fires a repository_dispatch into relay.
+# Matches lantern.yml / nurture-nav.yml.
+
+name: uis
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "GitLab ref (branch or tag)"
+        required: false
+        default: "main"
+      upload:
+        description: "Ship to TestFlight"
+        type: boolean
+        required: false
+        default: false
+      package_only:
+        description: "Build and package the IPA but do not send it to Apple"
+        type: boolean
+        required: false
+        default: false
+  repository_dispatch:
+    types: [uis-push, uis-release]
+
+concurrency:
+  group: relay-uis-${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/ios-build.yml
+    with:
+      app_name: UIS
+      gitlab_path: nurture-labs-llc/uis-mobile
+      project_path: ios/UIS.xcodeproj
+      scheme: UIS
+      ref: ${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
+      # TestFlight only on a release dispatch or an explicit manual tick.
+      upload: >-
+        ${{ github.event.action == 'uis-release'
+            || github.event.inputs.upload == 'true' }}
+      # The suite lives in ios/Package.swift and runs natively via `swift test`,
+      # so xcodebuild never boots a simulator; the non-upload path compiles for a
+      # device destination instead, which catches the same breakage.
+      run_tests: false
+      package_path: ios
+    secrets: inherit
