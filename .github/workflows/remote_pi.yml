@@ -1,0 +1,40 @@
+# Caller for the shared iOS pipeline in reoccurcat/relay.
+#
+# Remote Pi is a Flutter app. This caller uses the sideload path: builds an
+# unsigned IPA and uploads it as a workflow artifact. Download it and re-sign
+# on your machine with AltStore or Sideloadly (uses your Apple ID, 7-day
+# expiry for free accounts, 1yr for paid dev accounts).
+#
+# No App Store Connect record, bundle-id registration or ASC API key needed.
+
+name: remote_pi
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "GitLab ref (branch or tag)"
+        required: false
+        default: "main"
+  repository_dispatch:
+    types: [remote_pi-push, remote_pi-release]
+
+concurrency:
+  group: relay-remote_pi-${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/ios-build.yml
+    with:
+      app_name: RemotePi
+      gitlab_path: hayden/remote-pi
+      project_path: app/ios/Runner.xcworkspace
+      scheme: Runner
+      ref: ${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
+      flutter: true
+      flutter_project_path: app
+      sideload: true
+      upload: false
+      run_tests: false
+    secrets: inherit
