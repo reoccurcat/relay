@@ -34,7 +34,6 @@ jobs:
       ref: ${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
       flutter: true
       flutter_project_path: app
-      sideload: true
-      upload: false
+      upload: true
       run_tests: false
     secrets: inherit
