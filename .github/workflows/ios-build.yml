@@ -185,6 +185,35 @@ on:
         type: string
         default: ""
 
+      # Flutter apps need `flutter pub get` + `flutter build ios --no-codesign`
+      # before Xcode sees the workspace — that step downloads the engine, runs
+      # pod install, and writes ios/Flutter/Generated.xcconfig. Skipping it
+      # leaves Xcode with a workspace that references a Flutter.framework that
+      # is not on disk.
+      flutter:
+        required: false
+        type: boolean
+        default: false
+      flutter_project_path:
+        description: "Directory containing pubspec.yaml, relative to repo root. Required when flutter: true."
+        required: false
+        type: string
+        default: ""
+      flutter_version:
+        description: "Flutter version or channel (stable, beta, 3.24.0, ...)."
+        required: false
+        type: string
+        default: "stable"
+
+      # Build unsigned, wrap the .app in Payload/ as a .ipa, upload as a
+      # workflow artifact. For sideloading via AltStore/Sideloadly, which
+      # re-signs with the user's Apple ID on their machine. Skips every
+      # signing, provisioning, App Store Connect and fastlane path.
+      sideload:
+        required: false
+        type: boolean
+        default: false
+
     secrets:
       GITLAB_TOKEN:
         required: true
@@ -329,6 +358,28 @@ jobs:
                   pass
           print(f"restored mtimes for {restored} files")
           PY
+
+      # Flutter apps must run `flutter build ios --no-codesign` before any
+      # Xcode step: it downloads the pinned engine, runs pod install, and
+      # generates ios/Flutter/Generated.xcconfig. Without it Xcode opens the
+      # workspace on a broken reference.
+      - name: Setup Flutter
+        if: inputs.flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ inputs.flutter_version == 'stable' && 'stable' || '' }}
+          flutter-version: ${{ inputs.flutter_version != 'stable' && inputs.flutter_version || '' }}
+          cache: true
+
+      - name: Flutter pub get + build ios (no codesign)
+        if: inputs.flutter
+        working-directory: src/${{ inputs.flutter_project_path }}
+        run: |
+          set -euo pipefail
+          test -f pubspec.yaml || { echo "::error::pubspec.yaml not found in ${{ inputs.flutter_project_path }}"; exit 1; }
+          flutter --version
+          flutter pub get
+          flutter build ios --release --no-codesign
 
       - name: Resolve project flags
         id: proj
@@ -479,7 +530,7 @@ jobs:
 
       # ---------- compile-only path ----------
       - name: Build (no signing)
-        if: ${{ !inputs.upload && !inputs.run_tests }}
+        if: ${{ inputs.sideload || (!inputs.upload && !inputs.run_tests) }}
         working-directory: src
         run: |
           set -o pipefail
@@ -493,6 +544,34 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             | tee -a "$RUNNER_TEMP/build.log"
+
+      # ---------- sideload path ----------
+      # An .ipa is a zip of Payload/App.app. Nothing here signs; AltStore /
+      # Sideloadly re-signs on the user's machine with their Apple ID. No
+      # ASC key, no provisioning profile, no bundle-id registration needed.
+      - name: Package unsigned IPA (sideload)
+        if: inputs.sideload
+        run: |
+          set -euo pipefail
+          APP=$(find "$RUNNER_TEMP/DerivedData/Build/Products" -maxdepth 3 -type d -name '*.app' | head -1)
+          test -n "$APP" || { echo "::error::no .app found in DerivedData"; exit 1; }
+          echo "Packaging $APP"
+          STAGE="$RUNNER_TEMP/ipa-stage"
+          rm -rf "$STAGE" && mkdir -p "$STAGE/Payload"
+          cp -R "$APP" "$STAGE/Payload/"
+          OUT="$RUNNER_TEMP/${{ inputs.app_name }}-unsigned.ipa"
+          (cd "$STAGE" && zip -qry "$OUT" Payload)
+          ls -la "$OUT"
+          echo "IPA_PATH=$OUT" >> "$GITHUB_ENV"
+
+      - name: Upload sideload IPA artifact
+        if: inputs.sideload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.app_name }}-unsigned-ipa
+          path: ${{ env.IPA_PATH }}
+          if-no-files-found: error
+          retention-days: 14
 
       # ---------- release path ----------
       - name: Write App Store Connect credentials
