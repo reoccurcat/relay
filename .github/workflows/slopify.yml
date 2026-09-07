@@ -1,0 +1,53 @@
+# Caller workflow for the shared iOS pipeline.
+#
+# Lives at .github/workflows/slopify.yml in reoccurcat/relay. Kept in-repo so
+# the app's build contract is reviewable alongside the app. Source is on
+# GitLab; GitLab fires a repository_dispatch into relay. Matches
+# lantern.yml / nurture-nav.yml / uis.yml.
+
+name: slopify
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "GitLab ref (branch or tag)"
+        required: false
+        default: "main"
+      upload:
+        description: "Ship to TestFlight"
+        type: boolean
+        required: false
+        default: false
+      package_only:
+        description: "Build and package the IPA but do not send it to Apple"
+        type: boolean
+        required: false
+        default: false
+  repository_dispatch:
+    types: [slopify-push, slopify-release]
+
+concurrency:
+  group: relay-slopify-${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/ios-build.yml
+    with:
+      app_name: Slopify
+      gitlab_path: nurture-labs-llc/slopify-mobile
+      project_path: ios/Slopify.xcodeproj
+      scheme: Slopify
+      ref: ${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
+      # TestFlight only on a release dispatch or an explicit manual tick.
+      upload: >-
+        ${{ github.event.action == 'slopify-release'
+            || github.event.inputs.upload == 'true' }}
+      # The suite lives in ios/Package.swift and runs natively via `swift
+      # test`, so xcodebuild never boots a simulator; the non-upload path
+      # compiles for a device destination instead, which catches the same
+      # breakage.
+      run_tests: false
+      package_path: ios
+    secrets: inherit
