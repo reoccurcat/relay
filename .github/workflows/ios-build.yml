@@ -8,9 +8,19 @@ on:
         required: true
         type: string
       gitlab_path:
-        description: "namespace/project on the GitLab host"
-        required: true
+        description: "namespace/project on the GitLab host. Required unless source_url is set."
+        required: false
         type: string
+        default: ""
+      source_url:
+        description: >-
+          Optional git URL to clone instead of GitLab. Public HTTPS URL (any
+          host). When set, gitlab_path/gitlab_host/GITLAB_TOKEN are ignored.
+          Manual-dispatch escape hatch for one-off sideload builds of
+          open-source apps that don't live in the shared GitLab.
+        required: false
+        type: string
+        default: ""
       project_path:
         description: ".xcodeproj or .xcworkspace path, relative to repo root"
         required: true
@@ -216,7 +226,9 @@ on:
 
     secrets:
       GITLAB_TOKEN:
-        required: true
+        # Optional so source_url callers don't need a GitLab token; validated
+        # at runtime in the Clone step when gitlab_path is used.
+        required: false
       ASC_KEY_P8:
         required: false
       ASC_KEY_ID:
@@ -321,12 +333,20 @@ jobs:
 
       # NOTE: full history on purpose — `git rev-list --count` needs it.
       # --depth 1 would make every build number 1.
-      - name: Clone source from GitLab
+      - name: Clone source
         env:
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
         run: |
-          git clone --branch "${{ inputs.ref }}" \
-            "https://oauth2:${GITLAB_TOKEN}@${{ inputs.gitlab_host }}/${{ inputs.gitlab_path }}.git" src
+          if [ -n "${{ inputs.source_url }}" ]; then
+            git clone --branch "${{ inputs.ref }}" "${{ inputs.source_url }}" src
+          else
+            test -n "${{ inputs.gitlab_path }}" \
+              || { echo "::error::either source_url or gitlab_path must be set"; exit 1; }
+            test -n "${GITLAB_TOKEN}" \
+              || { echo "::error::GITLAB_TOKEN required for gitlab_path builds"; exit 1; }
+            git clone --branch "${{ inputs.ref }}" \
+              "https://oauth2:${GITLAB_TOKEN}@${{ inputs.gitlab_host }}/${{ inputs.gitlab_path }}.git" src
+          fi
           cd src && git log -1 --oneline
 
           # Deterministic mtimes (last-commit time per file): a fresh clone
