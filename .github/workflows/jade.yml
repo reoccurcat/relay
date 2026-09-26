@@ -31,9 +31,15 @@ jobs:
       project_path: Jade.xcodeproj
       scheme: Jade
       ref: ${{ github.event.inputs.ref || 'main' }}
-      # Jade.xcodeproj is on project format 110 — 26.1.1 also rejects it, so
-      # this stays at 26.3 (the newest on the runner image at time of writing).
+      # Jade.xcodeproj was authored under Xcode 27 and ships pbxproj
+      # objectVersion 110. Xcode 26.3 is the newest on the runner image and
+      # refuses to open format 110 with "future Xcode project file format".
+      # Downgrade objectVersion to 77 (Xcode 26.x native) before build — the
+      # project itself uses nothing 27-specific, so this is a header rewrite.
       xcode_version: "26.3"
+      pre_build_script: |
+        sed -i '' 's/objectVersion = 110;/objectVersion = 77;/' Jade.xcodeproj/project.pbxproj
+        grep -n objectVersion Jade.xcodeproj/project.pbxproj | head -2
       # Unsigned .app wrapped in Payload/, uploaded as a workflow artifact.
       # Signing happens on the desktop with the local dev cert + zsign.
       sideload: true

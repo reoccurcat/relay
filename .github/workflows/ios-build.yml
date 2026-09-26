@@ -21,6 +21,16 @@ on:
         required: false
         type: string
         default: ""
+      pre_build_script:
+        description: >-
+          Optional bash script to run in the cloned source directory after
+          checkout, before dependency resolution and build. Escape hatch for
+          third-party sources that need light patching before Xcode will open
+          them (project format downgrades, generated files, xcodegen, etc.).
+          Runs with set -euo pipefail; cwd is the repo root ("src").
+        required: false
+        type: string
+        default: ""
       project_path:
         description: ".xcodeproj or .xcworkspace path, relative to repo root"
         required: true
@@ -378,6 +388,18 @@ jobs:
                   pass
           print(f"restored mtimes for {restored} files")
           PY
+
+      # Run once, before dependency resolution and any Xcode step. Third-party
+      # sources built via source_url sometimes need light patching first — a
+      # pbxproj format downgrade for an unreleased Xcode, xcodegen against a
+      # project.yml, restoring a pinned file the CI didn't clone. Cwd is the
+      # repo root ("src"); the script inherits the same shell settings as
+      # every other run block in this job.
+      - name: Pre-build patch
+        if: inputs.pre_build_script != ''
+        working-directory: src
+        run: |
+          ${{ inputs.pre_build_script }}
 
       # Flutter apps must run `flutter build ios --no-codesign` before any
       # Xcode step: it downloads the pinned engine, runs pod install, and
