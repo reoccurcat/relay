@@ -1,10 +1,10 @@
 # Caller workflow for the shared iOS pipeline.
 #
-# One-off sideload build for Wind0ws11Aero/Jade — a sandbox-escape file
-# manager / MobileGestalt editor that exploits bad_query on iOS 26 – iOS 27
-# beta 4. Not our source; we build the unsigned .app off GitHub via the
-# reusable workflow's source_url escape hatch, sign locally, install to
-# a research device.
+# Sideload build for reoccurcat/Jade — our fork of Wind0ws11Aero/Jade with a
+# small JadeControlServer added on top. Jade itself is a sandbox-escape file
+# manager / MobileGestalt editor exploiting bad_query on iOS 26 – iOS 27
+# beta 4; the fork adds a localhost HTTP JSON API so a desktop tool can
+# drive it over USB (iproxy 8642 8642 <UDID>).
 #
 # Manual dispatch only. No push trigger.
 
@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Branch or tag on Wind0ws11Aero/Jade"
+        description: "Branch or tag on reoccurcat/Jade"
         required: false
         default: "main"
 
@@ -27,7 +27,7 @@ jobs:
     uses: ./.github/workflows/ios-build.yml
     with:
       app_name: Jade
-      source_url: https://github.com/Wind0ws11Aero/Jade.git
+      source_url: https://github.com/reoccurcat/Jade.git
       project_path: Jade.xcodeproj
       scheme: Jade
       ref: ${{ github.event.inputs.ref || 'main' }}
