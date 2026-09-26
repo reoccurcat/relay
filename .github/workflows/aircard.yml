@@ -1,0 +1,34 @@
+# Caller workflow for the shared iOS pipeline.
+#
+# One-off sideload build for Mak5er/AirCard-iOS — Apple Wallet card skinner /
+# PosterBoard wallpaper installer / lock-screen passcode themer. Not our
+# source; we build the unsigned .app off GitHub via the reusable workflow's
+# source_url escape hatch, sign locally, install to a research device.
+#
+# Manual dispatch only. No push trigger.
+
+name: aircard
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or tag on Mak5er/AirCard-iOS"
+        required: false
+        default: "main"
+
+concurrency:
+  group: relay-aircard-${{ github.event.inputs.ref || 'main' }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/ios-build.yml
+    with:
+      app_name: AirCard-iOS
+      source_url: https://github.com/Mak5er/AirCard-iOS.git
+      project_path: AirCard-iOS.xcodeproj
+      scheme: AirCard-iOS
+      ref: ${{ github.event.inputs.ref || 'main' }}
+      sideload: true
+      run_tests: false

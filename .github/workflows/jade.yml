@@ -1,0 +1,38 @@
+# Caller workflow for the shared iOS pipeline.
+#
+# One-off sideload build for Wind0ws11Aero/Jade — a sandbox-escape file
+# manager / MobileGestalt editor that exploits bad_query on iOS 26 – iOS 27
+# beta 4. Not our source; we build the unsigned .app off GitHub via the
+# reusable workflow's source_url escape hatch, sign locally, install to
+# a research device.
+#
+# Manual dispatch only. No push trigger.
+
+name: jade
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or tag on Wind0ws11Aero/Jade"
+        required: false
+        default: "main"
+
+concurrency:
+  group: relay-jade-${{ github.event.inputs.ref || 'main' }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/ios-build.yml
+    with:
+      app_name: Jade
+      source_url: https://github.com/Wind0ws11Aero/Jade.git
+      project_path: Jade.xcodeproj
+      scheme: Jade
+      ref: ${{ github.event.inputs.ref || 'main' }}
+      # Unsigned .app wrapped in Payload/, uploaded as a workflow artifact.
+      # Signing happens on the desktop with the local dev cert + zsign.
+      sideload: true
+      # No native package tests; no simulator boot.
+      run_tests: false
