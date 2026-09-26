@@ -31,9 +31,9 @@ jobs:
       project_path: Jade.xcodeproj
       scheme: Jade
       ref: ${{ github.event.inputs.ref || 'main' }}
-      # Jade.xcodeproj is on project format 110, so it needs Xcode 26.1+. The
-      # default 26.0.1 refuses to open it: "future Xcode project file format".
-      xcode_version: "26.1"
+      # Jade.xcodeproj is on project format 110 — 26.1.1 also rejects it, so
+      # this stays at 26.3 (the newest on the runner image at time of writing).
+      xcode_version: "26.3"
       # Unsigned .app wrapped in Payload/, uploaded as a workflow artifact.
       # Signing happens on the desktop with the local dev cert + zsign.
       sideload: true
