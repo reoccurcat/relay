@@ -38,8 +38,14 @@ jobs:
       # project itself uses nothing 27-specific, so this is a header rewrite.
       xcode_version: "26.3"
       pre_build_script: |
+        # 1. Downgrade pbxproj format 110 (Xcode 27) -> 77 (Xcode 26.x native).
         sed -i '' 's/objectVersion = 110;/objectVersion = 77;/' Jade.xcodeproj/project.pbxproj
-        grep -n objectVersion Jade.xcodeproj/project.pbxproj | head -2
+        # 2. Drop the Xcode 27 .icon programmatic-icon bundle and point the
+        #    asset-catalog compiler at the legacy AppIcon.appiconset that ships
+        #    alongside it. actool on 26.3 doesn't know how to compile a .icon.
+        rm -rf bad_query/JadeIcon.icon
+        sed -i '' 's/ASSETCATALOG_COMPILER_APPICON_NAME = JadeIcon;/ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;/g' Jade.xcodeproj/project.pbxproj
+        grep -nE "objectVersion|ASSETCATALOG_COMPILER_APPICON_NAME" Jade.xcodeproj/project.pbxproj | head -6
       # Unsigned .app wrapped in Payload/, uploaded as a workflow artifact.
       # Signing happens on the desktop with the local dev cert + zsign.
       sideload: true
