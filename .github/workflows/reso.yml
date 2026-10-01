@@ -1,0 +1,54 @@
+# Caller workflow for the shared iOS pipeline.
+#
+# Lives at .github/workflows/reso.yml in reoccurcat/relay. Reso is a Flutter
+# voice-training app (bundle io.nurturelabs.reso). Source is on GitLab; GitLab
+# fires a repository_dispatch into relay. Flutter model matches remote_pi.yml;
+# TestFlight upload-gating matches slopify.yml / uis.yml.
+
+name: reso
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "GitLab ref (branch or tag)"
+        required: false
+        default: "main"
+      upload:
+        description: "Ship to TestFlight"
+        type: boolean
+        required: false
+        default: false
+      package_only:
+        description: "Build and package the IPA but do not send it to Apple"
+        type: boolean
+        required: false
+        default: false
+  repository_dispatch:
+    types: [reso-push, reso-release]
+
+concurrency:
+  group: relay-reso-${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/ios-build.yml
+    with:
+      app_name: Reso
+      gitlab_path: nurture-labs-llc/reso
+      # Flutter generates ios/Runner.xcworkspace; flutter_project_path is the
+      # dir holding pubspec.yaml (repo root here). See remote_pi.yml.
+      flutter: true
+      flutter_project_path: "."
+      project_path: ios/Runner.xcworkspace
+      scheme: Runner
+      ref: ${{ github.event.client_payload.ref || github.event.inputs.ref || 'main' }}
+      # TestFlight only on a release dispatch or an explicit manual tick.
+      upload: >-
+        ${{ github.event.action == 'reso-release'
+            || github.event.inputs.upload == 'true' }}
+      # No native swift test suite; the non-upload path compiles for a device
+      # destination, which catches the same breakage.
+      run_tests: false
+    secrets: inherit
